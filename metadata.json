@@ -1,0 +1,8 @@
+{
+  "name": "Whiteboard Quiz Studio",
+  "description": "AI whiteboard animation video generator for movie and TV series guessing games, formatted for Instagram Reels, YouTube Shorts, and TikTok.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

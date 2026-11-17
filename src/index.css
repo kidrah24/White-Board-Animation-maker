@@ -1,0 +1,57 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --font-display: "Onest", system-ui, -apple-system, sans-serif;
+    --font-sans: "Onest", system-ui, -apple-system, sans-serif;
+    --font-mono: "JetBrains Mono", ui-monospace, monospace;
+    --font-marker: "Edu SA Hand", cursive, sans-serif;
+    --brand-bg: #111111;
+    --brand-surface: #1b1b1b;
+    --brand-border: #2d2d2d;
+    --brand-accent: #f96921;
+    --brand-accent-hover: #ff7b38;
+    --brand-gold: #ffb41f;
+    --brand-sky: #0099ff;
+    --brand-text: #f0f0f0;
+    --brand-muted: #9f9faa;
+  }
+
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: #111111;
+    color: #f0f0f0;
+  }
+
+  h1, h2, h3, .font-display {
+    font-family: var(--font-display);
+  }
+
+  .font-mono-tabular {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.studio-mat-grid {
+  background-color: #141414;
+  background-image: radial-gradient(#262626 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
