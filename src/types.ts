@@ -1,7 +1,17 @@
+import type { IllustrationId } from "./engine/illustrationLibrary";
+
 export type ContentType = "Movie" | "TV Series";
 export type DifficultyLevel = "Easy" | "Medium" | "Hard";
 export type DurationSeconds = 15 | 30 | 45 | 60;
 export type MarkerAccent = "orange" | "blue" | "red" | "green" | "amber";
+
+export type ClueLayout =
+  | "single_spotlight"
+  | "pair_relation"
+  | "cause_effect"
+  | "thought_bubble";
+
+export type ConnectorType = "plus" | "arrow" | "vs" | "equals";
 
 export type SymbolBadge =
   | "question"
@@ -31,10 +41,15 @@ export interface ClueScene {
   caption: string;
   symbolBadge: SymbolBadge;
   accentColor: MarkerAccent;
+  layout?: ClueLayout;
+  primaryIcon?: IllustrationId;
+  secondaryIcon?: IllustrationId;
+  connector?: ConnectorType;
+  boardNote?: string;
   calloutLabel?: string;
   calloutX?: number;
   calloutY?: number;
-  strokes: WhiteboardStroke[];
+  strokes?: WhiteboardStroke[];
 }
 
 export interface QuizStoryboard {

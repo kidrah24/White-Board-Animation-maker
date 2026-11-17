@@ -1,4 +1,16 @@
-import { ClueScene, MarkerAccent, QuizStoryboard, SymbolBadge } from "../types";
+import {
+  ClueLayout,
+  ClueScene,
+  ConnectorType,
+  MarkerAccent,
+  QuizStoryboard,
+  SymbolBadge,
+} from "../types";
+import {
+  ILLUSTRATION_LIBRARY,
+  IllustrationId,
+  IllustrationStrokeDef,
+} from "./illustrationLibrary";
 
 export const CANVAS_WIDTH = 720;
 export const CANVAS_HEIGHT = 1280;
@@ -134,7 +146,6 @@ function sampleSvgPath(
       if (i > 0) {
         const prev = pts[pts.length - 1];
         const segLen = Math.hypot(sx - prev.x, sy - prev.y);
-        // Handle M jumps inside a single compound d string gracefully by keeping step
         accum += segLen > 45 ? 2 : segLen;
       }
       pts.push({ x: sx, y: sy, dist: accum });
@@ -166,13 +177,131 @@ function buildStroke(
   };
 }
 
+function compileLibraryIcon(
+  iconId: IllustrationId | undefined,
+  accentHex: string,
+  scale: number,
+  offsetX: number,
+  offsetY: number
+): CompiledStroke[] {
+  const defs: IllustrationStrokeDef[] =
+    (iconId && ILLUSTRATION_LIBRARY[iconId]) || ILLUSTRATION_LIBRARY.magnifying_glass;
+  return defs
+    .map((def) => {
+      const strokeHex =
+        def.role === "accent"
+          ? accentHex
+          : def.role === "detail"
+          ? INK_MUTED
+          : INK_BLACK;
+      const w = (def.width || 4) * Math.max(0.85, Math.min(1.25, scale * 0.85));
+      return buildStroke(def.d, strokeHex, w, scale, scale, offsetX, offsetY, false);
+    })
+    .filter((s): s is CompiledStroke => s !== null);
+}
+
+function compileConnectorStrokes(
+  connector: ConnectorType | undefined,
+  accentHex: string,
+  cx: number,
+  cy: number
+): CompiledStroke[] {
+  const kind = connector || "plus";
+  let raw: Array<{ d: string; w: number }> = [];
+  if (kind === "plus") {
+    raw = [
+      { d: `M ${cx - 20} ${cy} L ${cx + 20} ${cy}`, w: 5.5 },
+      { d: `M ${cx} ${cy - 20} L ${cx} ${cy + 20}`, w: 5.5 },
+    ];
+  } else if (kind === "arrow") {
+    raw = [
+      { d: `M ${cx - 34} ${cy} Q ${cx} ${cy - 14} ${cx + 30} ${cy}`, w: 5 },
+      { d: `M ${cx + 14} ${cy - 14} L ${cx + 32} ${cy} L ${cx + 14} ${cy + 14}`, w: 5 },
+    ];
+  } else if (kind === "equals") {
+    raw = [
+      { d: `M ${cx - 22} ${cy - 10} L ${cx + 22} ${cy - 10}`, w: 5.5 },
+      { d: `M ${cx - 22} ${cy + 10} L ${cx + 22} ${cy + 10}`, w: 5.5 },
+    ];
+  } else {
+    raw = [
+      { d: `M ${cx - 26} ${cy - 16} L ${cx - 14} ${cy + 16} L ${cx - 2} ${cy - 16}`, w: 5 },
+      {
+        d: `M ${cx + 24} ${cy - 12} C ${cx + 8} ${cy - 20}, ${cx + 6} ${cy}, ${cx + 18} ${cy} C ${cx + 28} ${cy}, ${cx + 26} ${cy + 18}, ${cx + 6} ${cy + 14}`,
+        w: 5,
+      },
+    ];
+  }
+  return raw
+    .map((s) => buildStroke(s.d, accentHex, s.w, 1, 1, 0, 0, true))
+    .filter((s): s is CompiledStroke => s !== null);
+}
+
+function compileCompositionalArt(
+  clue: ClueScene,
+  accentHex: string
+): CompiledStroke[] {
+  const layout: ClueLayout =
+    clue.layout || (clue.secondaryIcon ? "pair_relation" : "single_spotlight");
+
+  if (!clue.primaryIcon && clue.strokes && clue.strokes.length > 0) {
+    return clue.strokes
+      .map((s) => {
+        const strokeHex =
+          s.color === "accent" ? accentHex : s.color === "muted" ? INK_MUTED : INK_BLACK;
+        const width = Math.min(8, Math.max(2.5, (s.strokeWidth || 3.5) * 1.25));
+        return buildStroke(s.d, strokeHex, width, 1.4, 1.4, 80, 315, Boolean(s.annotation));
+      })
+      .filter((s): s is CompiledStroke => s !== null);
+  }
+
+  const out: CompiledStroke[] = [];
+
+  if (layout === "pair_relation" && clue.secondaryIcon) {
+    out.push(...compileLibraryIcon(clue.primaryIcon, accentHex, 1.12, 82, 386));
+    out.push(...compileConnectorStrokes(clue.connector, accentHex, 360, 498));
+    out.push(...compileLibraryIcon(clue.secondaryIcon, accentHex, 1.12, 414, 386));
+  } else if (layout === "cause_effect" && clue.secondaryIcon) {
+    out.push(...compileLibraryIcon(clue.primaryIcon, accentHex, 1.02, 92, 336));
+    const arrow = [
+      buildStroke("M 310 424 Q 405 390 426 474", accentHex, 5, 1, 1, 0, 0, true),
+      buildStroke("M 408 458 L 428 476 L 442 454", accentHex, 5, 1, 1, 0, 0, true),
+    ].filter((s): s is CompiledStroke => s !== null);
+    out.push(...arrow);
+    out.push(...compileLibraryIcon(clue.secondaryIcon, accentHex, 1.05, 405, 488));
+  } else if (layout === "thought_bubble") {
+    const thinker = [
+      buildStroke("M 155 478 A 28 28 0 1 1 154.9 478 Z", INK_BLACK, 5),
+      buildStroke("M 105 640 C 105 574, 205 574, 205 640", INK_BLACK, 5),
+      buildStroke("M 218 494 A 8 8 0 1 1 217.9 494 Z", accentHex, 3.5, 1, 1, 0, 0, true),
+      buildStroke("M 244 470 A 12 12 0 1 1 243.9 470 Z", accentHex, 3.5, 1, 1, 0, 0, true),
+      buildStroke(
+        "M 310 342 C 334 316, 396 316, 424 340 C 470 326, 526 350, 528 386 C 578 394, 594 448, 566 488 C 584 532, 546 576, 496 570 C 468 600, 402 602, 370 574 C 318 584, 272 548, 286 504 C 254 474, 266 410, 304 398 C 292 374, 296 354, 310 342 Z",
+        INK_MUTED,
+        4
+      ),
+    ].filter((s): s is CompiledStroke => s !== null);
+    out.push(...thinker);
+    out.push(...compileLibraryIcon(clue.primaryIcon, accentHex, 1.05, 318, 355));
+  } else {
+    out.push(...compileLibraryIcon(clue.primaryIcon, accentHex, 1.56, 204, 344));
+    const spotlight = [
+      buildStroke("M 150 370 L 150 338 L 182 338", accentHex, 4, 1, 1, 0, 0, true),
+      buildStroke("M 538 338 L 570 338 L 570 370", accentHex, 4, 1, 1, 0, 0, true),
+      buildStroke("M 150 638 L 150 670 L 182 670", accentHex, 4, 1, 1, 0, 0, true),
+      buildStroke("M 538 670 L 570 670 L 570 638", accentHex, 4, 1, 1, 0, 0, true),
+    ].filter((s): s is CompiledStroke => s !== null);
+    out.push(...spotlight);
+  }
+
+  return out;
+}
+
 export function compileStoryboard(storyboard: QuizStoryboard): CompiledStoryboard {
   const isMovie = storyboard.contentType === "Movie";
 
-  // Intro icon strokes (centered around x: 220..500, y: 310..560)
   const introRaw = isMovie
     ? [
-        // Cinema clapperboard
         { d: "M 40 80 L 240 80 L 240 210 L 40 210 Z", color: INK_BLACK, w: 6 },
         { d: "M 40 80 L 235 35 L 244 65 L 49 110 Z", color: ACCENT_HEX.orange, w: 5 },
         { d: "M 80 71 L 98 99", color: INK_BLACK, w: 4 },
@@ -181,7 +310,6 @@ export function compileStoryboard(storyboard: QuizStoryboard): CompiledStoryboar
         { d: "M 118 122 L 172 150 L 118 178 Z", color: ACCENT_HEX.blue, w: 5 },
       ]
     : [
-        // Retro TV set with rabbit-ear antennas
         { d: "M 45 75 L 235 75 L 235 205 L 45 205 Z", color: INK_BLACK, w: 6 },
         { d: "M 65 95 L 195 95 L 195 185 L 65 185 Z", color: ACCENT_HEX.orange, w: 4 },
         { d: "M 140 75 L 105 28", color: INK_BLACK, w: 4 },
@@ -197,11 +325,9 @@ export function compileStoryboard(storyboard: QuizStoryboard): CompiledStoryboar
 
   const introDrawLength = introStrokes.reduce((acc, s) => acc + s.totalLength, 0);
 
-  // Compile each clue scene
   const clues: CompiledClue[] = storyboard.clues.map((clue) => {
-    const accentHex = ACCENT_HEX[clue.accentColor] || ACCENT_HEX.blue;
+    const accentHex = ACCENT_HEX[clue.accentColor] || ACCENT_HEX.orange;
 
-    // Hand-drawn sketchbook frame box around illustration
     const frameStrokes: CompiledStroke[] = [
       buildStroke(
         "M 64 295 Q 360 288 656 296 Q 662 510 654 735 Q 360 742 66 734 Q 58 515 64 295",
@@ -215,30 +341,8 @@ export function compileStoryboard(storyboard: QuizStoryboard): CompiledStoryboar
       ),
     ].filter((s): s is CompiledStroke => s !== null);
 
-    // Scale AI 400x280 strokes cleanly into (x: 78..642, y: 318..712)
-    const artScale = 1.4;
-    const artOffsetX = 80;
-    const artOffsetY = 315;
+    const artStrokes = compileCompositionalArt(clue, accentHex);
 
-    const artStrokes = clue.strokes
-      .map((s) => {
-        const strokeHex =
-          s.color === "accent" ? accentHex : s.color === "muted" ? INK_MUTED : INK_BLACK;
-        const width = Math.min(8, Math.max(2.5, (s.strokeWidth || 3.5) * 1.25));
-        return buildStroke(
-          s.d,
-          strokeHex,
-          width,
-          artScale,
-          artScale,
-          artOffsetX,
-          artOffsetY,
-          Boolean(s.annotation)
-        );
-      })
-      .filter((s): s is CompiledStroke => s !== null);
-
-    // Top-right corner symbol badge doodle
     const badgeRaw = SYMBOL_PATHS[clue.symbolBadge] || SYMBOL_PATHS.question;
     const badgeStrokes = badgeRaw
       .map((d) => buildStroke(d, accentHex, 3.5, 0.95, 0.95, 582, 312, true))
@@ -257,7 +361,6 @@ export function compileStoryboard(storyboard: QuizStoryboard): CompiledStoryboar
     };
   });
 
-  // Countdown ring
   const countdownRingStrokes = [
     buildStroke(
       "M 360 440 A 135 135 0 1 1 359.8 440",
@@ -271,7 +374,6 @@ export function compileStoryboard(storyboard: QuizStoryboard): CompiledStoryboar
     ),
   ].filter((s): s is CompiledStroke => s !== null);
 
-  // Reveal starburst strokes
   const revealBurstRaw = [
     "M 360 190 L 360 150",
     "M 245 215 L 215 185",
@@ -286,7 +388,6 @@ export function compileStoryboard(storyboard: QuizStoryboard): CompiledStoryboar
     )
     .filter((s): s is CompiledStroke => s !== null);
 
-  // Build timeline windows matched to storyboard.duration with exact 5-second answer countdown
   const { introEnd, countdownStart, revealStart } = computeTimelineBounds(
     storyboard.duration
   );
@@ -358,7 +459,6 @@ function drawPartialStrokes(
     for (let i = 1; i < pts.length; i++) {
       const prev = pts[i - 1];
       const curr = pts[i];
-      // Prevent connecting across internal SVG M-command jumps
       const jump = Math.hypot(curr.x - prev.x, curr.y - prev.y);
       if (curr.dist <= maxDistInStroke) {
         if (jump > 45) {
@@ -453,16 +553,13 @@ function drawDryEraseHandAndMarker(
 ) {
   ctx.save();
   ctx.translate(tipX, tipY);
-  // Subtle natural wrist tilt
   ctx.rotate(-0.18);
 
-  // Soft drop shadow on whiteboard
   ctx.shadowColor = "rgba(15, 23, 42, 0.16)";
   ctx.shadowBlur = 14;
   ctx.shadowOffsetX = 6;
   ctx.shadowOffsetY = 10;
 
-  // Marker nib
   ctx.fillStyle = accentColor;
   ctx.beginPath();
   ctx.moveTo(0, 0);
@@ -471,7 +568,6 @@ function drawDryEraseHandAndMarker(
   ctx.closePath();
   ctx.fill();
 
-  // Marker tapered collar
   ctx.fillStyle = "#1E293B";
   ctx.beginPath();
   ctx.moveTo(10, -14);
@@ -481,7 +577,6 @@ function drawDryEraseHandAndMarker(
   ctx.closePath();
   ctx.fill();
 
-  // Marker barrel (white dry-erase body)
   ctx.fillStyle = "#FFFFFF";
   ctx.strokeStyle = "#CBD5E1";
   ctx.lineWidth = 2;
@@ -494,7 +589,6 @@ function drawDryEraseHandAndMarker(
   ctx.fill();
   ctx.stroke();
 
-  // Colored stripe band on marker barrel
   ctx.fillStyle = accentColor;
   ctx.beginPath();
   ctx.moveTo(76, -101);
@@ -504,13 +598,11 @@ function drawDryEraseHandAndMarker(
   ctx.closePath();
   ctx.fill();
 
-  // Stylized clean studio hand gripping marker
   ctx.shadowBlur = 10;
   ctx.fillStyle = "#F5D0B5";
   ctx.strokeStyle = "#D4A383";
   ctx.lineWidth = 2;
 
-  // Palm & wrist silhouette
   ctx.beginPath();
   ctx.moveTo(52, -32);
   ctx.bezierCurveTo(75, -18, 128, -5, 175, 18);
@@ -521,13 +613,11 @@ function drawDryEraseHandAndMarker(
   ctx.fill();
   ctx.stroke();
 
-  // Index finger resting along marker
   ctx.beginPath();
   ctx.roundRect(36, -54, 62, 22, 11);
   ctx.fill();
   ctx.stroke();
 
-  // Thumb wrapping across barrel
   ctx.beginPath();
   ctx.roundRect(44, -28, 48, 22, 11);
   ctx.fill();
@@ -540,7 +630,6 @@ function drawWhiteboardSurface(ctx: CanvasRenderingContext2D) {
   ctx.fillStyle = BOARD_BG;
   ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-  // Subtle corner lighting gradient for authentic studio whiteboard surface
   const grad = ctx.createRadialGradient(
     CANVAS_WIDTH * 0.5,
     CANVAS_HEIGHT * 0.42,
@@ -554,7 +643,6 @@ function drawWhiteboardSurface(ctx: CanvasRenderingContext2D) {
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
 
-  // Very subtle architectural dot texture
   ctx.fillStyle = "rgba(148, 163, 184, 0.14)";
   for (let y = 40; y < CANVAS_HEIGHT; y += 48) {
     for (let x = 40; x < CANVAS_WIDTH; x += 48) {
@@ -579,7 +667,6 @@ export function renderWhiteboardFrame(
 
   drawWhiteboardSurface(ctx);
 
-  // Top subtle watermark-free studio header bar on board (inside safe zone y >= 110)
   ctx.save();
   ctx.font = '600 22px "Onest", sans-serif';
   ctx.fillStyle = "#71717D";
@@ -591,7 +678,6 @@ export function renderWhiteboardFrame(
   );
   ctx.restore();
 
-  // 1. INTRO SCENE
   if (t < timeline.introEnd) {
     const localP = (t - timeline.introStart) / (timeline.introEnd - timeline.introStart);
     const drawP = Math.min(1, localP / 0.65);
@@ -622,7 +708,6 @@ export function renderWhiteboardFrame(
       Math.max(0, (localP - 0.35) / 0.4)
     );
 
-    // Wipe transition out on last 8%
     if (localP > 0.92) {
       const wipe = (localP - 0.92) / 0.08;
       ctx.fillStyle = `rgba(253, 253, 251, ${wipe})`;
@@ -636,7 +721,6 @@ export function renderWhiteboardFrame(
     return { phase: "intro", activeClueIndex: null, isDrawing: false };
   }
 
-  // 2. CLUE SCENES
   for (let i = 0; i < compiled.clues.length; i++) {
     const win = timeline.clueWindows[i];
     if (t >= win.start && t < win.end) {
@@ -644,7 +728,6 @@ export function renderWhiteboardFrame(
       const accentHex = ACCENT_HEX[cClue.clue.accentColor] || ACCENT_HEX.orange;
       const localP = (t - win.start) / (win.end - win.start);
 
-      // Step progress dots at top (y = 185)
       const dotGap = 32;
       const startDotsX = CANVAS_WIDTH / 2 - ((compiled.clues.length - 1) * dotGap) / 2;
       for (let d = 0; d < compiled.clues.length; d++) {
@@ -663,7 +746,6 @@ export function renderWhiteboardFrame(
         }
       }
 
-      // Clue header
       drawWrappedMarkerText(
         ctx,
         cClue.clue.header,
@@ -676,42 +758,33 @@ export function renderWhiteboardFrame(
         Math.min(1, localP / 0.22)
       );
 
-      // Progressive drawing takes first 68% of clue window, leaving 32% for reading & comprehension
       const drawP = Math.min(1, localP / 0.68);
       const tip = drawPartialStrokes(ctx, cClue.allStrokes, drawP);
 
-      // Optional callout label appears once strokes hit 65%
-      if (cClue.clue.calloutLabel && localP > 0.45) {
-        const cx = 80 + (cClue.clue.calloutX ?? 280) * 1.4;
-        const cy = 315 + (cClue.clue.calloutY ?? 65) * 1.4;
-        const callP = Math.min(1, (localP - 0.45) / 0.2);
+      const boardLabel = cClue.clue.boardNote || cClue.clue.calloutLabel;
+      if (boardLabel && localP > 0.42) {
+        const labelP = Math.min(1, (localP - 0.42) / 0.22);
         ctx.save();
-        ctx.globalAlpha = callP;
-        ctx.font = '700 25px "Edu SA Hand", cursive, sans-serif';
+        ctx.globalAlpha = labelP;
+        ctx.font = '700 28px "Edu SA Hand", cursive, sans-serif';
         ctx.fillStyle = accentHex;
         ctx.textAlign = "center";
-        ctx.fillText(
-          cClue.clue.calloutLabel,
-          Math.max(130, Math.min(CANVAS_WIDTH - 130, cx)),
-          Math.max(330, Math.min(705, cy))
-        );
+        ctx.fillText(boardLabel, CANVAS_WIDTH / 2, 696);
         ctx.restore();
       }
 
-      // Caption text drawn progressively beneath frame (y = 785)
       drawWrappedMarkerText(
         ctx,
         cClue.clue.caption,
         CANVAS_WIDTH / 2,
-        785,
+        782,
         590,
         48,
         '500 34px "Edu SA Hand", cursive, sans-serif',
         INK_BLACK,
-        Math.max(0, (localP - 0.22) / 0.48)
+        Math.max(0, (localP - 0.2) / 0.46)
       );
 
-      // Gentle board wipe fade on last 6%
       if (localP > 0.94) {
         const wipe = (localP - 0.94) / 0.06;
         ctx.fillStyle = `rgba(253, 253, 251, ${wipe})`;
@@ -726,7 +799,6 @@ export function renderWhiteboardFrame(
     }
   }
 
-  // 3. COUNTDOWN SCENE (5 seconds after all clues before revealing answer)
   if (t >= timeline.countdownStart && t < timeline.countdownEnd) {
     const localP =
       (t - timeline.countdownStart) / (timeline.countdownEnd - timeline.countdownStart);
@@ -773,7 +845,6 @@ export function renderWhiteboardFrame(
     return { phase: "countdown", activeClueIndex: null, isDrawing: false };
   }
 
-  // 4. REVEAL SCENE
   const revealP = Math.min(
     1,
     (t - timeline.revealStart) / Math.max(0.5, timeline.revealEnd - timeline.revealStart)

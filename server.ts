@@ -27,32 +27,82 @@ function createAiClient() {
   });
 }
 
-const STROKE_SCHEMA = {
-  type: Type.OBJECT,
-  properties: {
-    d: {
-      type: Type.STRING,
-      description:
-        "Valid SVG path d attribute within viewBox 0 0 400 280 (coordinates inside x: 30..370, y: 24..256). Use concise integer M, L, C, Q, A, Z commands.",
-    },
-    color: {
-      type: Type.STRING,
-      enum: ["black", "accent", "muted"],
-      description:
-        "Marker ink role: 'black' for main contours, 'accent' for iconic color highlights or arrows, 'muted' for subtle shading.",
-    },
-    strokeWidth: {
-      type: Type.NUMBER,
-      description: "Stroke thickness from 2 to 6.",
-    },
-    annotation: {
-      type: Type.BOOLEAN,
-      description:
-        "True if this stroke is a directional arrow, highlight circle, underline, or emphasis mark.",
-    },
-  },
-  required: ["d", "color", "strokeWidth"],
-};
+const ILLUSTRATION_IDS = [
+  "spinning_top",
+  "pills",
+  "flask_beaker",
+  "rv_van",
+  "ship_liner",
+  "iceberg",
+  "bat_emblem",
+  "lightning_bolt",
+  "glasses_scar",
+  "ring_band",
+  "volcano_mountain",
+  "lightsaber_sword",
+  "helmet_mask",
+  "rocket_spacecraft",
+  "black_hole_planet",
+  "clock_tower",
+  "sports_car",
+  "bicycle",
+  "moon_crescent",
+  "waffle_plate",
+  "monster_portal",
+  "cassette_tape",
+  "headphones",
+  "magnifying_glass",
+  "footprints",
+  "crown",
+  "throne_swords",
+  "dragon",
+  "shark_fin",
+  "dinosaur",
+  "umbrella",
+  "mask_theater",
+  "money_stack",
+  "vault_safe",
+  "television",
+  "camera_lens",
+  "newspaper",
+  "airplane",
+  "train_locomotive",
+  "bridge_city",
+  "city_skyline",
+  "house_mansion",
+  "island_palm",
+  "desert_cactus",
+  "forest_trees",
+  "ocean_waves",
+  "fire_flames",
+  "hourglass",
+  "brain_maze",
+  "eye_iris",
+  "skull_bones",
+  "sword_shield",
+  "bow_arrow",
+  "trophy_cup",
+  "microphone",
+  "chess_piece",
+  "key_lock",
+  "door_portal",
+  "letter_envelope",
+  "book_journal",
+  "prison_bars",
+  "police_badge",
+  "syringe_vial",
+  "robot_android",
+  "alien_ufo",
+  "coffee_mug",
+  "suitcase",
+  "balloon",
+  "guitar_instrument",
+  "telephone",
+  "ticket_stub",
+  "compass",
+  "heart_broken",
+  "puzzle_cube",
+] as const;
 
 const CLUE_SCHEMA = {
   type: Type.OBJECT,
@@ -61,12 +111,41 @@ const CLUE_SCHEMA = {
     header: {
       type: Type.STRING,
       description:
-        "Short whiteboard clue label like 'Clue 1: The Iconic Prop' (max 34 chars, never reveal the title).",
+        "Short whiteboard clue header like 'Clue 1: The Desert Lab' (max 32 chars, never reveal the title).",
     },
     caption: {
       type: Type.STRING,
       description:
-        "Punchy handwritten clue sentence shown below the drawing (max 70 chars). Must NOT contain the movie/series title.",
+        "Concrete, clever trivia clue sentence shown below the sketch (max 68 chars). Must give a real, fair hint without naming the title or character proper names.",
+    },
+    layout: {
+      type: Type.STRING,
+      enum: ["single_spotlight", "pair_relation", "cause_effect", "thought_bubble"],
+      description:
+        "Visual composition on the whiteboard: 'pair_relation' (2 icons linked by +, ->, vs, or =), 'cause_effect' (trigger icon curving into result icon), 'thought_bubble' (person imagining primaryIcon), or 'single_spotlight' (1 giant iconic object).",
+    },
+    primaryIcon: {
+      type: Type.STRING,
+      enum: [...ILLUSTRATION_IDS],
+      description:
+        "Primary artist-drawn whiteboard illustration chosen strictly from the allowed list.",
+    },
+    secondaryIcon: {
+      type: Type.STRING,
+      enum: [...ILLUSTRATION_IDS],
+      description:
+        "Second whiteboard illustration paired with primaryIcon when layout is 'pair_relation' or 'cause_effect'. Choose a distinct icon that completes the visual story.",
+    },
+    connector: {
+      type: Type.STRING,
+      enum: ["plus", "arrow", "vs", "equals"],
+      description:
+        "Symbol drawn between primaryIcon and secondaryIcon in 'pair_relation' layout.",
+    },
+    boardNote: {
+      type: Type.STRING,
+      description:
+        "Short 1 to 4 word handwritten punchline drawn inside the bottom of the sketch frame (e.g., '99.1% Pure', '88 MPH', 'Never Stops?'). Never put the title here.",
     },
     symbolBadge: {
       type: Type.STRING,
@@ -89,33 +168,16 @@ const CLUE_SCHEMA = {
       type: Type.STRING,
       enum: ["orange", "blue", "red", "green", "amber"],
     },
-    calloutLabel: {
-      type: Type.STRING,
-      description:
-        "Optional short 1-3 word marker note next to the sketch (e.g., '1985', 'Pure Blue', 'Never stops').",
-    },
-    calloutX: {
-      type: Type.NUMBER,
-      description: "X coordinate (50..350) for calloutLabel inside 400x280 box.",
-    },
-    calloutY: {
-      type: Type.NUMBER,
-      description: "Y coordinate (35..245) for calloutLabel inside 400x280 box.",
-    },
-    strokes: {
-      type: Type.ARRAY,
-      items: STROKE_SCHEMA,
-      description:
-        "5 to 8 clean, recognizable SVG path strokes forming a hand-drawn whiteboard illustration for this clue.",
-    },
   },
   required: [
     "index",
     "header",
     "caption",
+    "layout",
+    "primaryIcon",
     "symbolBadge",
     "accentColor",
-    "strokes",
+    "boardNote",
   ],
 };
 
@@ -169,6 +231,50 @@ const STORYBOARD_SCHEMA = {
     "clues",
   ],
 };
+
+const VALID_ICON_SET = new Set<string>(ILLUSTRATION_IDS);
+
+function normalizeClue(clue: any, idx: number) {
+  const primaryIcon = VALID_ICON_SET.has(clue?.primaryIcon)
+    ? clue.primaryIcon
+    : "magnifying_glass";
+  const secondaryIcon = VALID_ICON_SET.has(clue?.secondaryIcon)
+    ? clue.secondaryIcon
+    : undefined;
+  let layout =
+    clue?.layout === "pair_relation" ||
+    clue?.layout === "cause_effect" ||
+    clue?.layout === "thought_bubble" ||
+    clue?.layout === "single_spotlight"
+      ? clue.layout
+      : secondaryIcon
+      ? "pair_relation"
+      : "single_spotlight";
+
+  if ((layout === "pair_relation" || layout === "cause_effect") && !secondaryIcon) {
+    layout = "single_spotlight";
+  }
+
+  return {
+    id: `clue-${idx + 1}-${Date.now()}`,
+    index: idx + 1,
+    header: String(clue?.header || `Clue ${idx + 1}`),
+    caption: String(clue?.caption || ""),
+    layout,
+    primaryIcon,
+    secondaryIcon,
+    connector:
+      clue?.connector === "plus" ||
+      clue?.connector === "arrow" ||
+      clue?.connector === "vs" ||
+      clue?.connector === "equals"
+        ? clue.connector
+        : "plus",
+    boardNote: clue?.boardNote ? String(clue.boardNote).slice(0, 32) : undefined,
+    symbolBadge: clue?.symbolBadge || "question",
+    accentColor: clue?.accentColor || "orange",
+  };
+}
 
 function extractCleanErrorMessage(error: any): string {
   const raw = typeof error?.message === "string" ? error.message : String(error || "");
@@ -253,7 +359,7 @@ async function generateWithFallbackStream(
           const clueMatches = rawText.match(/"header"\s*:/g)?.length ?? 0;
           if (clueMatches > lastClueProgress) {
             lastClueProgress = clueMatches;
-            onStatus(`Sketching clue ${clueMatches}...`);
+            onStatus(`Composing clue ${clueMatches}...`);
           }
         }
       }
@@ -328,7 +434,7 @@ async function startServer() {
       res.setHeader("Connection", "keep-alive");
       res.setHeader("X-Accel-Buffering", "no");
       res.flushHeaders?.();
-      sendStatus("Crafting difficulty-calibrated visual clues...");
+      sendStatus("Designing visual clue scenes...");
       heartbeat = setInterval(() => {
         if (!res.writableEnded) {
           res.write(`: keepalive\n\n`);
@@ -351,32 +457,39 @@ async function startServer() {
     try {
       const difficultyGuidance =
         validDifficulty === "Easy"
-          ? "Easy difficulty: Use unmistakable iconic props and signature visual motifs that casual viewers recognize quickly. Never write the title or main character full names."
+          ? "Easy difficulty: Use the most famous, unmistakable signature props, vehicles, locations, and plot twists so viewers get an 'aha!' moment within 2–3 clues."
           : validDifficulty === "Hard"
-          ? "Hard difficulty: Use subtle, symbolic visual clues—obscure props, structural metaphors, and indirect plot hints for cinema/TV buffs without obvious giveaways."
-          : "Medium difficulty: Progress smoothly from atmospheric setting clues early on to sharper signature props and motifs by the final clue.";
+          ? "Hard difficulty: Start with clever indirect plot mechanics, thematic pairings, or deep-cut props (Clues 1–2) before narrowing to sharper iconic hints at the end—still concrete and fair, never generic."
+          : "Medium difficulty: Build a crisp funnel—Clue 1 establishes setting/premise, middle clues lock in key objects & conflicts, final clue delivers an unmistakable visual signature.";
 
-      const systemInstruction = `You are a storyboard artist and trivia writer for viral whiteboard animation guessing games on Reels, Shorts, and TikTok.
+      const systemInstruction = `You are a viral whiteboard quiz director for Instagram Reels, YouTube Shorts, and TikTok.
+Your job is to craft a ${validClueCount}-clue visual guessing game for the ${validType}: "${cleanTitle}".
 
-Design a ${validClueCount}-clue visual guessing game storyboard for the ${validType}: "${cleanTitle}".
+HOW DRAWINGS WORK (CRITICAL):
+You do NOT write raw SVG coordinates. Instead, our dry-erase engine draws crisp, recognizable artist-crafted illustrations from the schema's icon enum and composes them into 4 visual storytelling layouts:
+- "pair_relation": Draws primaryIcon + connector ("plus", "arrow", "vs", "equals") + secondaryIcon. IDEAL for combining two iconic elements (e.g., flask_beaker + rv_van = desert lab, ship_liner + iceberg = doomed voyage, rocket_spacecraft -> black_hole_planet = space mission, clock_tower + sports_car = time travel).
+- "cause_effect": Draws primaryIcon curving via an action arrow into secondaryIcon (e.g., syringe_vial -> heart_broken, bicycle -> monster_portal, prison_bars -> key_lock).
+- "thought_bubble": Draws a thinker imagining primaryIcon (great for dreams, memories, secrets, hallucinations, or obsessions).
+- "single_spotlight": Draws one large framed centerpiece icon (e.g., spinning_top, ring_band, waffle_plate, bat_emblem, chess_piece).
 
-CLUE RULES:
+Use "pair_relation" or "cause_effect" for MOST clues (at least 60% of clues) because two-object visual equations make 10x better charades/pictionary hints than single generic symbols!
+NEVER repeat the same primaryIcon across different clues in the same quiz.
+
+WHAT MAKES GREAT HINTS (NEVER BE VAGUE!):
 1. ${difficultyGuidance}
-2. NEVER spoil the answer! Never include the title words, character proper names, or actor names in any clue header, caption, or calloutLabel.
-3. Order clues from broader/intriguing (Clue 1) to sharper/more revealing (Clue ${validClueCount}).
-4. Keep captions punchy and under 70 characters.
-
-WHITEBOARD SVG RULES:
-- Each clue's 'strokes' array draws progressively on a 400x280 canvas (stay inside x: 30..370, y: 24..256, centered around 200, 140).
-- Use 5 to 8 clean, expressive SVG path 'd' strings per clue with concise integer coordinates (M, L, Q, C, A, Z):
-  1) Main silhouette ('color': 'black', 'strokeWidth': 4)
-  2) Key inner details ('color': 'black' or 'muted', 'strokeWidth': 2.5)
-  3) Iconic colored highlight ('color': 'accent', 'strokeWidth': 4) picking the best accentColor ('orange', 'blue', 'red', 'green', 'amber')
-  4) 1 annotation arrow or emphasis mark ('annotation': true, 'color': 'accent', 'strokeWidth': 3).`;
+2. BANNED VAGUE CLUES: Never write generic filler like "A dark secret hides inside", "Everything changes forever", or "Heroes must unite". Every clue MUST cite a specific plot detail, setting, occupation, vehicle, object, rule, or iconic number/quote!
+3. GOOD EXAMPLES:
+   - Breaking Bad: { layout: "pair_relation", primaryIcon: "flask_beaker", connector: "plus", secondaryIcon: "rv_van", boardNote: "Desert Lab", caption: "A chemistry teacher cooks inside a rolling camper." }
+   - Inception: { layout: "single_spotlight", primaryIcon: "spinning_top", boardNote: "Never stops?", caption: "One tiny metal totem proves if you are still dreaming." }
+   - Titanic: { layout: "pair_relation", primaryIcon: "ship_liner", connector: "vs", secondaryIcon: "iceberg", boardNote: "April 1912", caption: "An 'unsinkable' luxury liner meets frozen doom at sea." }
+   - The Matrix: { layout: "thought_bubble", primaryIcon: "pills", boardNote: "Red or Blue?", caption: "Swallow one capsule to wake up from a simulated world." }
+   - Back to the Future: { layout: "pair_relation", primaryIcon: "sports_car", connector: "plus", secondaryIcon: "clock_tower", boardNote: "88 MPH!", caption: "Hit top speed during a lightning storm to jump decades." }
+4. NO SPOILERS: Never put any word from "${cleanTitle}", actor names, or main character proper names in header, caption, or boardNote.
+5. Keep boardNote super punchy (1–4 words) and caption sharp (max 68 chars).`;
 
       const trimmed = await generateWithFallbackStream(
         ai,
-        `Create a ${validClueCount}-clue whiteboard animation quiz storyboard for the ${validType} "${cleanTitle}" (${validDifficulty} difficulty, ${validDuration}s total video). Generate exactly ${validClueCount} clues numbered 1 through ${validClueCount}.`,
+        `Create a ${validClueCount}-clue whiteboard quiz storyboard for the ${validType} "${cleanTitle}" (${validDifficulty} difficulty, ${validDuration}s total video). Number clues 1 to ${validClueCount} in a logical progression from setting/premise to iconic signature reveal.`,
         systemInstruction,
         STORYBOARD_SCHEMA,
         sendStatus
@@ -387,18 +500,7 @@ WHITEBOARD SVG RULES:
       const parsed = JSON.parse(trimmed);
       const clues = (Array.isArray(parsed.clues) ? parsed.clues : [])
         .slice(0, validClueCount)
-        .map((clue: any, idx: number) => ({
-          id: `clue-${idx + 1}-${Date.now()}`,
-          index: idx + 1,
-          header: String(clue.header || `Clue ${idx + 1}`),
-          caption: String(clue.caption || ""),
-          symbolBadge: clue.symbolBadge || "question",
-          accentColor: clue.accentColor || "orange",
-          calloutLabel: clue.calloutLabel ? String(clue.calloutLabel) : undefined,
-          calloutX: typeof clue.calloutX === "number" ? clue.calloutX : undefined,
-          calloutY: typeof clue.calloutY === "number" ? clue.calloutY : undefined,
-          strokes: Array.isArray(clue.strokes) ? clue.strokes : [],
-        }));
+        .map((clue: any, idx: number) => normalizeClue(clue, idx));
 
       const storyboardPayload = {
         title: String(parsed.canonicalTitle || cleanTitle),
@@ -447,29 +549,18 @@ WHITEBOARD SVG RULES:
       const ai = createAiClient();
       const rawText = await generateWithFallbackStream(
         ai,
-        `Generate a fresh, creative alternative visual clue #${clueIndex} (out of ${totalClues}) for the ${contentType} "${cleanTitle}" at ${difficulty} difficulty. Avoid duplicating these existing clue captions: ${JSON.stringify(
+        `Generate a fresh, vivid visual clue #${clueIndex} (out of ${totalClues}) for the ${contentType} "${cleanTitle}" at ${difficulty} difficulty. Do NOT repeat or paraphrase these existing captions: ${JSON.stringify(
           existingCaptions || []
-        )}. Remember: never reveal the title, use coordinates within 30..370 x 24..256, and include 5 to 8 crisp SVG strokes.`,
-        "You are a whiteboard animation illustrator. Output one fresh ClueScene JSON object with clean SVG strokes in a 400x280 viewBox, never spoiling the movie/series title.",
+        )}. Choose a distinct primaryIcon (and secondaryIcon when using pair_relation or cause_effect), write a punchy 1–4 word boardNote, and write a concrete spoiler-free caption (max 68 chars).`,
+        "You are a whiteboard quiz visual director. Pick recognizable compositional icons from the allowed enum (preferring pair_relation or cause_effect visual equations), add a 1-4 word boardNote, and write a specific, non-vague trivia hint that never reveals the title or character proper names.",
         CLUE_SCHEMA
       );
 
       const clue = JSON.parse(rawText);
-      return res.json({
-        id: `clue-${clueIndex}-${Date.now()}`,
-        index: Number(clueIndex) || 1,
-        header: String(clue.header || `Clue ${clueIndex}`),
-        caption: String(clue.caption || ""),
-        symbolBadge: clue.symbolBadge || "question",
-        accentColor: clue.accentColor || "orange",
-        calloutLabel: clue.calloutLabel ? String(clue.calloutLabel) : undefined,
-        calloutX: typeof clue.calloutX === "number" ? clue.calloutX : undefined,
-        calloutY: typeof clue.calloutY === "number" ? clue.calloutY : undefined,
-        strokes: Array.isArray(clue.strokes) ? clue.strokes : [],
-      });
+      return res.json(normalizeClue(clue, Math.max(0, (Number(clueIndex) || 1) - 1)));
     } catch (error: any) {
       console.error("Clue regeneration error:", error);
-      return res.status(500).json({ error: error?.message || "Failed to regenerate clue." });
+      return res.status(500).json({ error: extractCleanErrorMessage(error) });
     }
   });
 

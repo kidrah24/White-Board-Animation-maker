@@ -408,6 +408,30 @@ export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
                       />
                     </div>
 
+                    {/* Editable Sketch Punchline Label */}
+                    <div className="space-y-1">
+                      <label
+                        htmlFor={`clue-note-${idx}`}
+                        className="block text-[11px] font-medium text-[#9F9FAA]"
+                      >
+                        Sketch Punchline Label
+                      </label>
+                      <input
+                        id={`clue-note-${idx}`}
+                        type="text"
+                        maxLength={32}
+                        placeholder="e.g., 99.1% Pure, 88 MPH!"
+                        value={clue.boardNote ?? clue.calloutLabel ?? ""}
+                        onChange={(e) =>
+                          onUpdateClue(idx, {
+                            boardNote: e.target.value,
+                            calloutLabel: e.target.value,
+                          })
+                        }
+                        className="w-full px-2.5 py-1.5 text-xs text-[#F0F0F0] bg-[#111111] border border-[#303030] rounded-md placeholder:text-[#71717D] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F96921]"
+                      />
+                    </div>
+
                     {/* Marker Accent Swatch + Callout */}
                     <div className="flex items-center justify-between gap-3">
                       <div className="flex items-center gap-1.5">
