@@ -368,17 +368,39 @@ function extractCleanErrorMessage(error: any): string {
   return raw || "Failed to generate whiteboard storyboard. Please verify your setup and retry.";
 }
 
-function isTransientHighDemandError(error: any): boolean {
+let primaryModelCooldownUntil = 0;
+
+function isQuotaOrLimitError(error: any): boolean {
   const status = Number(error?.status || error?.code || 0);
   const msg = String(error?.message || "").toLowerCase();
   return (
+    status === 429 ||
+    msg.includes("429") ||
+    msg.includes("resource_exhausted") ||
+    msg.includes("resource exhausted") ||
+    msg.includes("quota") ||
+    msg.includes("rate limit") ||
+    msg.includes("rate_limit") ||
+    msg.includes("limit exceeded") ||
+    msg.includes("too many requests")
+  );
+}
+
+function isFallbackEligibleError(error: any): boolean {
+  const status = Number(error?.status || error?.code || 0);
+  const msg = String(error?.message || "").toLowerCase();
+  return (
+    isQuotaOrLimitError(error) ||
     status === 503 ||
     status === 502 ||
     status === 504 ||
+    status === 500 ||
+    status === 404 ||
     msg.includes("503") ||
     msg.includes("unavailable") ||
     msg.includes("high demand") ||
-    msg.includes("overloaded")
+    msg.includes("overloaded") ||
+    msg.includes("capacity")
   );
 }
 
@@ -389,10 +411,17 @@ async function generateWithFallbackStream(
   schema: any,
   onStatus?: (msg: string) => void
 ): Promise<string> {
-  const attempts: Array<{ model: string; thinkingLevel: ThinkingLevel; firstTokenMs: number }> = [
+  const allAttempts: Array<{ model: string; thinkingLevel: ThinkingLevel; firstTokenMs: number }> = [
     { model: "gemini-4-hydrogen", thinkingLevel: ThinkingLevel.LOW, firstTokenMs: 10000 },
     { model: "gemini-3.1-flash-lite", thinkingLevel: ThinkingLevel.MINIMAL, firstTokenMs: 25000 },
   ];
+
+  const primaryCoolingDown = Date.now() < primaryModelCooldownUntil;
+  const attempts = primaryCoolingDown ? allAttempts.slice(1) : allAttempts;
+
+  if (primaryCoolingDown) {
+    onStatus?.("Latest model limit active — switching to previous model (gemini-3.1-flash-lite)...");
+  }
 
   let lastError: any = null;
 
@@ -449,8 +478,16 @@ async function generateWithFallbackStream(
         err?.name === "AbortError" ||
         String(err?.message || "").toLowerCase().includes("timed out") ||
         String(err?.message || "").toLowerCase().includes("abort");
-      if (i < attempts.length - 1 && (isTransientHighDemandError(err) || isTimeout)) {
-        onStatus?.("Primary model busy, switching to fast storyboard model...");
+
+      if (attempt.model === "gemini-4-hydrogen" && isQuotaOrLimitError(err)) {
+        primaryModelCooldownUntil = Date.now() + 5 * 60 * 1000;
+      }
+
+      if (i < attempts.length - 1 && (isFallbackEligibleError(err) || isTimeout)) {
+        const reason = isQuotaOrLimitError(err)
+          ? "Latest model limit exceeded, switching back to previous model..."
+          : "Primary model busy, switching back to previous model...";
+        onStatus?.(reason);
         continue;
       }
       throw err;
