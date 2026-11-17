@@ -1,5 +1,7 @@
 import "dotenv/config";
 import express from "express";
+import fs from "fs";
+import fsPromises from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
@@ -9,6 +11,76 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT) || 3000;
+const DATA_DIR = path.resolve(__dirname, "data");
+const SAVED_VIDEOS_FILE = path.join(DATA_DIR, "saved-videos.json");
+const SEED_VIDEOS_FILE = path.resolve(__dirname, "src/data/seedVideos.json");
+
+interface ServerSavedVideo {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  isSeeded?: boolean;
+  storyboard: any;
+}
+
+async function readSeedVideos(): Promise<ServerSavedVideo[]> {
+  try {
+    if (!fs.existsSync(SEED_VIDEOS_FILE)) return [];
+    const raw = await fsPromises.readFile(SEED_VIDEOS_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function loadSavedVideos(): Promise<ServerSavedVideo[]> {
+  try {
+    await fsPromises.mkdir(DATA_DIR, { recursive: true });
+    if (!fs.existsSync(SAVED_VIDEOS_FILE)) {
+      const seeded = await readSeedVideos();
+      await fsPromises.writeFile(SAVED_VIDEOS_FILE, JSON.stringify(seeded, null, 2), "utf8");
+      return seeded;
+    }
+    const raw = await fsPromises.readFile(SAVED_VIDEOS_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.sort(
+      (a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime()
+    );
+  } catch (err) {
+    console.error("Failed to load saved videos:", err);
+    return await readSeedVideos();
+  }
+}
+
+async function writeSavedVideos(videos: ServerSavedVideo[]): Promise<void> {
+  await fsPromises.mkdir(DATA_DIR, { recursive: true });
+  const sorted = [...videos].sort(
+    (a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime()
+  );
+  await fsPromises.writeFile(SAVED_VIDEOS_FILE, JSON.stringify(sorted, null, 2), "utf8");
+}
+
+async function upsertSavedVideo(record: ServerSavedVideo): Promise<ServerSavedVideo[]> {
+  const existing = await loadSavedVideos();
+  const idx = existing.findIndex((v) => v.id === record.id);
+  const next =
+    idx >= 0
+      ? existing.map((v, i) => (i === idx ? record : v))
+      : [record, ...existing];
+  await writeSavedVideos(next);
+  return next.sort(
+    (a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime()
+  );
+}
+
+async function deleteSavedVideo(id: string): Promise<ServerSavedVideo[]> {
+  const existing = await loadSavedVideos();
+  const next = existing.filter((v) => v.id !== id);
+  await writeSavedVideos(next);
+  return next;
+}
 
 function createAiClient() {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -396,6 +468,45 @@ async function startServer() {
     res.json({ ok: true, hasApiKey: Boolean(process.env.GEMINI_API_KEY) });
   });
 
+  app.get("/api/videos", async (_req, res) => {
+    try {
+      const videos = await loadSavedVideos();
+      res.json({ videos });
+    } catch (error: any) {
+      res.status(500).json({ error: error?.message || "Failed to load saved videos." });
+    }
+  });
+
+  app.post("/api/videos", async (req, res) => {
+    try {
+      const { id, createdAt, updatedAt, isSeeded, storyboard } = req.body ?? {};
+      if (!storyboard || typeof storyboard.title !== "string" || !Array.isArray(storyboard.clues)) {
+        return res.status(400).json({ error: "Invalid video storyboard payload." });
+      }
+      const now = new Date().toISOString();
+      const record: ServerSavedVideo = {
+        id: typeof id === "string" && id.trim() ? id.trim() : `vid-${Date.now()}`,
+        createdAt: typeof createdAt === "string" ? createdAt : now,
+        updatedAt: typeof updatedAt === "string" ? updatedAt : now,
+        isSeeded: Boolean(isSeeded),
+        storyboard,
+      };
+      const videos = await upsertSavedVideo(record);
+      res.json({ video: record, videos });
+    } catch (error: any) {
+      res.status(500).json({ error: error?.message || "Failed to save video." });
+    }
+  });
+
+  app.delete("/api/videos/:id", async (req, res) => {
+    try {
+      const videos = await deleteSavedVideo(req.params.id);
+      res.json({ ok: true, videos });
+    } catch (error: any) {
+      res.status(500).json({ error: error?.message || "Failed to delete video." });
+    }
+  });
+
   app.post("/api/generate-storyboard", async (req, res) => {
     const { title, contentType, difficulty, duration, clueCount } = req.body ?? {};
     const cleanTitle = typeof title === "string" ? title.trim() : "";
@@ -522,13 +633,29 @@ WHAT MAKES GREAT HINTS (NEVER BE VAGUE!):
         clues,
       };
 
+      const nowIso = new Date().toISOString();
+      const savedRecord: ServerSavedVideo = {
+        id: `vid-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        isSeeded: false,
+        storyboard: storyboardPayload,
+      };
+      await upsertSavedVideo(savedRecord);
+
       if (wantsStream) {
         if (!res.writableEnded) {
-          res.write(`data: ${JSON.stringify({ type: "result", storyboard: storyboardPayload })}\n\n`);
+          res.write(
+            `data: ${JSON.stringify({
+              type: "result",
+              storyboard: storyboardPayload,
+              savedRecord,
+            })}\n\n`
+          );
           res.end();
         }
       } else {
-        res.json(storyboardPayload);
+        res.json({ ...storyboardPayload, savedRecord });
       }
     } catch (error: any) {
       console.error("Storyboard generation error:", error);

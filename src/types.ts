@@ -74,3 +74,11 @@ export interface GenerateRequest {
   duration: DurationSeconds;
   clueCount: number;
 }
+
+export interface SavedVideoRecord {
+  id: string;
+  createdAt: string;
+  updatedAt: string;
+  isSeeded?: boolean;
+  storyboard: QuizStoryboard;
+}

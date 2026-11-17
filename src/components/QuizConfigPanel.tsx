@@ -1,5 +1,5 @@
-import React from "react";
-import { Loader2, Minus, Plus, RefreshCw, Play } from "lucide-react";
+import React, { useMemo, useState } from "react";
+import { Loader2, Minus, Plus, RefreshCw, Play, Search, Trash2, SlidersHorizontal, Film } from "lucide-react";
 import {
   ClueScene,
   ContentType,
@@ -7,12 +7,15 @@ import {
   DurationSeconds,
   MarkerAccent,
   QuizStoryboard,
+  SavedVideoRecord,
 } from "../types";
 import { CompiledStoryboard, computeTimelineBounds } from "../engine/whiteboardEngine";
 
+export type StudioPanelTab = "setup" | "clues" | "history";
+
 interface QuizConfigPanelProps {
-  activeTab: "setup" | "clues";
-  onTabChange: (tab: "setup" | "clues") => void;
+  activeTab: StudioPanelTab;
+  onTabChange: (tab: StudioPanelTab) => void;
   title: string;
   onTitleChange: (val: string) => void;
   contentType: ContentType;
@@ -33,6 +36,10 @@ interface QuizConfigPanelProps {
   onUpdateClue: (index: number, patch: Partial<ClueScene>) => void;
   onRegenerateClue: (index: number) => void;
   regeneratingClueIndex: number | null;
+  savedVideos: SavedVideoRecord[];
+  activeVideoId: string | null;
+  onSelectSavedVideo: (record: SavedVideoRecord, nextTab?: StudioPanelTab) => void;
+  onDeleteSavedVideo: (id: string) => void;
 }
 
 const ACCENT_SWATCHES: Array<{ id: MarkerAccent; label: string; dotClass: string }> = [
@@ -74,7 +81,39 @@ export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
   onUpdateClue,
   onRegenerateClue,
   regeneratingClueIndex,
+  savedVideos,
+  activeVideoId,
+  onSelectSavedVideo,
+  onDeleteSavedVideo,
 }) => {
+  const [libraryQuery, setLibraryQuery] = useState("");
+  const [libraryTypeFilter, setLibraryTypeFilter] = useState<"All" | ContentType>("All");
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+
+  const filteredVideos = useMemo(() => {
+    const q = libraryQuery.trim().toLowerCase();
+    return savedVideos.filter((item) => {
+      if (libraryTypeFilter !== "All" && item.storyboard.contentType !== libraryTypeFilter) {
+        return false;
+      }
+      if (!q) return true;
+      return (
+        item.storyboard.title.toLowerCase().includes(q) ||
+        item.storyboard.genreLabel.toLowerCase().includes(q) ||
+        item.storyboard.creatorOrDirector.toLowerCase().includes(q)
+      );
+    });
+  }, [savedVideos, libraryQuery, libraryTypeFilter]);
+
+  const formatSavedDate = (iso: string) => {
+    try {
+      const d = new Date(iso);
+      return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    } catch {
+      return "";
+    }
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     onGenerate();
@@ -86,28 +125,39 @@ export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
     <div className="bg-[#1B1B1B] border border-[#2D2D2D] rounded-xl flex flex-col h-full overflow-hidden">
       {/* Segmented Control Header */}
       <div className="p-3 border-b border-[#2D2D2D] bg-[#161616]">
-        <div className="grid grid-cols-2 gap-1 p-1 bg-[#111111] border border-[#2D2D2D] rounded-lg">
+        <div className="grid grid-cols-3 gap-1 p-1 bg-[#111111] border border-[#2D2D2D] rounded-lg">
           <button
             type="button"
             onClick={() => onTabChange("setup")}
-            className={`px-3 py-2 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
+            className={`px-2 py-2 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
               activeTab === "setup"
                 ? "bg-[#262626] text-[#F0F0F0]"
                 : "text-[#9F9FAA] hover:text-[#F0F0F0]"
             }`}
           >
-            Quiz Parameters
+            Parameters
           </button>
           <button
             type="button"
             onClick={() => onTabChange("clues")}
-            className={`px-3 py-2 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
+            className={`px-2 py-2 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
               activeTab === "clues"
                 ? "bg-[#262626] text-[#F0F0F0]"
                 : "text-[#9F9FAA] hover:text-[#F0F0F0]"
             }`}
           >
             {storyboard ? `Storyboard (${storyboard.clues.length})` : "Storyboard"}
+          </button>
+          <button
+            type="button"
+            onClick={() => onTabChange("history")}
+            className={`px-2 py-2 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
+              activeTab === "history"
+                ? "bg-[#262626] text-[#F0F0F0]"
+                : "text-[#9F9FAA] hover:text-[#F0F0F0]"
+            }`}
+          >
+            Saved ({savedVideos.length})
           </button>
         </div>
       </div>
@@ -293,23 +343,32 @@ export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
             </div>
           </div>
         </form>
-      ) : (
+      ) : activeTab === "clues" ? (
         /* Storyboard Clues Editor */
         <div className="flex-1 overflow-y-auto divide-y divide-[#2D2D2D]">
           {!storyboard ? (
             <div className="p-6 text-center space-y-3">
               <p className="text-sm font-medium text-[#F0F0F0]">No storyboard generated yet</p>
               <p className="text-xs text-[#9F9FAA] leading-relaxed">
-                Generate a video from Quiz Parameters to inspect, edit captions, adjust marker
-                colors, or redraw individual clues.
+                Generate a video from Parameters or load one from Saved Videos to inspect, edit
+                captions, adjust marker colors, or redraw individual clues.
               </p>
-              <button
-                type="button"
-                onClick={() => onTabChange("setup")}
-                className="px-4 py-2 text-xs font-semibold text-[#111111] bg-[#F96921] hover:bg-[#FF7B38] rounded-lg cursor-pointer"
-              >
-                Go to Quiz Parameters
-              </button>
+              <div className="flex items-center justify-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => onTabChange("setup")}
+                  className="px-4 py-2 text-xs font-semibold text-[#111111] bg-[#F96921] hover:bg-[#FF7B38] rounded-lg cursor-pointer"
+                >
+                  Create New
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onTabChange("history")}
+                  className="px-4 py-2 text-xs font-medium text-[#F0F0F0] bg-[#262626] hover:bg-[#303030] rounded-lg cursor-pointer"
+                >
+                  Saved ({savedVideos.length})
+                </button>
+              </div>
             </div>
           ) : (
             <>
@@ -463,6 +522,163 @@ export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
               })}
             </>
           )}
+        </div>
+      ) : (
+        /* Saved Videos Library */
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <div className="p-4 border-b border-[#2D2D2D] bg-[#161616] space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <h2 className="text-sm font-semibold text-[#F0F0F0]">Previously Generated Videos</h2>
+                <p className="text-[11px] text-[#9F9FAA]">
+                  Replay, customize clues, or export any saved quiz video.
+                </p>
+              </div>
+              <span className="text-xs font-mono-tabular text-[#FFB41F] whitespace-nowrap">
+                {savedVideos.length} total
+              </span>
+            </div>
+
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-[#71717D] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="search"
+                value={libraryQuery}
+                onChange={(e) => setLibraryQuery(e.target.value)}
+                placeholder="Search by title, genre, or creator..."
+                aria-label="Search saved videos"
+                className="w-full pl-8 pr-3 py-1.5 text-xs text-[#F0F0F0] bg-[#111111] border border-[#303030] rounded-lg placeholder:text-[#71717D] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F96921]"
+              />
+            </div>
+
+            <div className="flex items-center gap-1.5">
+              {(["All", "Movie", "TV Series"] as const).map((typeOption) => (
+                <button
+                  key={typeOption}
+                  type="button"
+                  onClick={() => setLibraryTypeFilter(typeOption)}
+                  className={`px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors cursor-pointer ${
+                    libraryTypeFilter === typeOption
+                      ? "bg-[#F96921] text-[#111111] font-semibold"
+                      : "bg-[#111111] text-[#9F9FAA] border border-[#2D2D2D] hover:text-[#F0F0F0]"
+                  }`}
+                >
+                  {typeOption}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex-1 overflow-y-auto divide-y divide-[#2D2D2D]">
+            {filteredVideos.length === 0 ? (
+              <div className="p-6 text-center space-y-2.5">
+                <Film className="w-7 h-7 text-[#71717D] mx-auto" />
+                <p className="text-sm font-medium text-[#F0F0F0]">No matching videos found</p>
+                <p className="text-xs text-[#9F9FAA]">
+                  {savedVideos.length === 0
+                    ? "Generate your first quiz video from the Parameters tab."
+                    : "Try clearing your search filter or switching categories."}
+                </p>
+              </div>
+            ) : (
+              filteredVideos.map((record) => {
+                const sb = record.storyboard;
+                const isSelected = activeVideoId === record.id;
+                const isConfirmingDelete = confirmDeleteId === record.id;
+
+                return (
+                  <div
+                    key={record.id}
+                    className={`p-4 space-y-2.5 transition-colors ${
+                      isSelected ? "bg-[#F96921]/10" : "bg-[#1B1B1B] hover:bg-[#212121]"
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <h3 className="text-sm font-semibold text-[#F0F0F0] truncate">
+                            {sb.title}
+                          </h3>
+                          {isSelected && (
+                            <span className="text-[11px] font-medium text-[#F96921] shrink-0">
+                              On Stage
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-[#9F9FAA] truncate mt-0.5">
+                          {sb.contentType} · {sb.difficulty} ·{" "}
+                          <span className="font-mono-tabular">{sb.duration}s</span> ·{" "}
+                          <span className="font-mono-tabular">{sb.clues.length} clues</span>
+                        </p>
+                      </div>
+                      <span className="text-[11px] font-mono-tabular text-[#71717D] whitespace-nowrap shrink-0">
+                        {formatSavedDate(record.updatedAt || record.createdAt)}
+                      </span>
+                    </div>
+
+                    <p className="text-[11px] text-[#71717D] truncate">
+                      {sb.genreLabel}
+                      {sb.releaseYear ? ` · ${sb.releaseYear}` : ""}
+                      {sb.creatorOrDirector ? ` · ${sb.creatorOrDirector}` : ""}
+                    </p>
+
+                    <div className="flex items-center justify-between gap-2 pt-0.5">
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => onSelectSavedVideo(record)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-[#111111] bg-[#F96921] hover:bg-[#FF7B38] rounded-md transition-colors cursor-pointer"
+                        >
+                          <Play className="w-3 h-3" />
+                          <span>Play</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onSelectSavedVideo(record, "clues")}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-[#D4D4DC] hover:text-[#F0F0F0] bg-[#262626] hover:bg-[#303030] rounded-md transition-colors cursor-pointer"
+                        >
+                          <SlidersHorizontal className="w-3 h-3" />
+                          <span>Edit Clues</span>
+                        </button>
+                      </div>
+
+                      {isConfirmingDelete ? (
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setConfirmDeleteId(null);
+                              onDeleteSavedVideo(record.id);
+                            }}
+                            className="px-2 py-1 text-[11px] font-medium text-red-200 bg-red-900/60 hover:bg-red-800/70 rounded cursor-pointer"
+                          >
+                            Remove
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteId(null)}
+                            className="px-2 py-1 text-[11px] text-[#9F9FAA] hover:text-[#F0F0F0] cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteId(record.id)}
+                          aria-label={`Remove ${sb.title} from saved videos`}
+                          title="Remove from saved videos"
+                          className="p-1.5 text-[#71717D] hover:text-red-300 hover:bg-[#262626] rounded-md transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
         </div>
       )}
     </div>

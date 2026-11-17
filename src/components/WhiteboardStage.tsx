@@ -29,6 +29,8 @@ interface WhiteboardStageProps {
   isPlaying: boolean;
   onPlayingChange: (playing: boolean) => void;
   onTrySample: (title: string, contentType: "Movie" | "TV Series") => void;
+  savedCount?: number;
+  onBrowseSaved?: () => void;
 }
 
 function formatTime(sec: number): string {
@@ -47,6 +49,8 @@ export const WhiteboardStage: React.FC<WhiteboardStageProps> = ({
   isPlaying,
   onPlayingChange,
   onTrySample,
+  savedCount = 0,
+  onBrowseSaved,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const soundRef = useRef<WhiteboardSoundEngine | null>(null);
@@ -341,19 +345,32 @@ export const WhiteboardStage: React.FC<WhiteboardStageProps> = ({
                 </div>
 
                 <div className="pt-1 flex flex-col gap-2">
+                  {onBrowseSaved && savedCount > 0 && (
+                    <button
+                      type="button"
+                      onClick={onBrowseSaved}
+                      className="w-full px-3 py-2 text-xs font-semibold text-[#111111] bg-[#F96921] hover:bg-[#FF7B38] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+                    >
+                      Browse Saved Videos ({savedCount})
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => onTrySample("Inception", "Movie")}
-                    className="w-full px-3 py-2 text-xs font-semibold text-[#111111] bg-[#F96921] hover:bg-[#FF7B38] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+                    className={`w-full px-3 py-2 text-xs rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
+                      onBrowseSaved && savedCount > 0
+                        ? "font-medium text-[#111111] bg-[#EAEAE6] hover:bg-[#DFDFDA]"
+                        : "font-semibold text-[#111111] bg-[#F96921] hover:bg-[#FF7B38]"
+                    }`}
                   >
-                    Try Sample: Inception
+                    Generate New: Inception
                   </button>
                   <button
                     type="button"
                     onClick={() => onTrySample("Breaking Bad", "TV Series")}
                     className="w-full px-3 py-2 text-xs font-medium text-[#111111] bg-[#EAEAE6] hover:bg-[#DFDFDA] rounded-lg transition-colors cursor-pointer whitespace-nowrap"
                   >
-                    Try Sample: Breaking Bad
+                    Generate New: Breaking Bad
                   </button>
                 </div>
               </div>

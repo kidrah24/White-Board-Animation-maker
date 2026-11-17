@@ -1,15 +1,65 @@
-import { useMemo, useState } from "react";
-import { QuizConfigPanel } from "./components/QuizConfigPanel";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { QuizConfigPanel, StudioPanelTab } from "./components/QuizConfigPanel";
 import { WhiteboardStage } from "./components/WhiteboardStage";
 import { PublishingSpecsModal } from "./components/PublishingSpecsModal";
 import { compileStoryboard } from "./engine/whiteboardEngine";
+import seedVideosJson from "./data/seedVideos.json";
 import {
   ClueScene,
   ContentType,
   DifficultyLevel,
   DurationSeconds,
   QuizStoryboard,
+  SavedVideoRecord,
 } from "./types";
+
+const LOCAL_STORAGE_KEY = "whiteboard_quiz_saved_videos_v1";
+const SEEDED_VIDEOS = seedVideosJson as SavedVideoRecord[];
+
+function mergeSavedVideoLists(
+  primary: SavedVideoRecord[],
+  secondary: SavedVideoRecord[]
+): SavedVideoRecord[] {
+  const byId = new Map<string, SavedVideoRecord>();
+  for (const item of [...secondary, ...primary]) {
+    if (!item?.id || !item?.storyboard) continue;
+    const prev = byId.get(item.id);
+    if (!prev) {
+      byId.set(item.id, item);
+    } else {
+      const prevTime = new Date(prev.updatedAt || prev.createdAt).getTime();
+      const curTime = new Date(item.updatedAt || item.createdAt).getTime();
+      if (curTime >= prevTime) {
+        byId.set(item.id, item);
+      }
+    }
+  }
+  return Array.from(byId.values()).sort(
+    (a, b) =>
+      new Date(b.updatedAt || b.createdAt).getTime() -
+      new Date(a.updatedAt || a.createdAt).getTime()
+  );
+}
+
+function readLocalSavedVideos(): SavedVideoRecord[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+    if (!raw) return SEEDED_VIDEOS;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return SEEDED_VIDEOS;
+    return parsed;
+  } catch {
+    return SEEDED_VIDEOS;
+  }
+}
+
+function writeLocalSavedVideos(videos: SavedVideoRecord[]) {
+  try {
+    localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(videos));
+  } catch {
+    // ignore storage quota errors
+  }
+}
 
 async function parseJsonSafely(response: Response): Promise<any> {
   const raw = await response.text();
@@ -33,8 +83,10 @@ export default function App() {
   const [duration, setDuration] = useState<DurationSeconds>(30);
   const [clueCount, setClueCount] = useState<number>(5);
 
-  const [activeTab, setActiveTab] = useState<"setup" | "clues">("setup");
+  const [activeTab, setActiveTab] = useState<StudioPanelTab>("setup");
   const [storyboard, setStoryboard] = useState<QuizStoryboard | null>(null);
+  const [activeVideoId, setActiveVideoId] = useState<string | null>(null);
+  const [savedVideos, setSavedVideos] = useState<SavedVideoRecord[]>(() => readLocalSavedVideos());
   const [currentTime, setCurrentTime] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
 
@@ -45,6 +97,47 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [regeneratingClueIndex, setRegeneratingClueIndex] = useState<number | null>(null);
   const [specsModalOpen, setSpecsModalOpen] = useState(false);
+
+  const syncTimeoutRef = useRef<number | null>(null);
+
+  // Sync saved videos from server on startup & merge with local browser cache
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/videos");
+        if (!res.ok) return;
+        const data = await parseJsonSafely(res);
+        if (cancelled || !Array.isArray(data?.videos)) return;
+
+        const serverVideos = data.videos as SavedVideoRecord[];
+        setSavedVideos((prevLocal) => {
+          const merged = serverVideos.length > 0
+            ? mergeSavedVideoLists(serverVideos, prevLocal.filter((v) => !v.isSeeded))
+            : prevLocal;
+          writeLocalSavedVideos(merged);
+          return merged;
+        });
+      } catch {
+        // Keep local cache silently if server request fails
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const persistVideoToServer = async (record: SavedVideoRecord) => {
+    try {
+      await fetch("/api/videos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(record),
+      });
+    } catch {
+      // Already cached in localStorage
+    }
+  };
 
   const compiled = useMemo(() => {
     if (!storyboard) return null;
@@ -89,12 +182,13 @@ export default function App() {
       });
 
       const contentTypeHeader = response.headers.get("content-type") || "";
+      let receivedStoryboard: QuizStoryboard | null = null;
+      let receivedSavedRecord: SavedVideoRecord | null = null;
 
       if (contentTypeHeader.includes("text/event-stream") && response.body) {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
-        let receivedStoryboard: QuizStoryboard | null = null;
 
         while (true) {
           const { value, done } = await reader.read();
@@ -117,6 +211,9 @@ export default function App() {
               throw new Error(payload.error || "Unable to generate whiteboard storyboard.");
             } else if (payload.type === "result" && payload.storyboard) {
               receivedStoryboard = payload.storyboard as QuizStoryboard;
+              if (payload.savedRecord) {
+                receivedSavedRecord = payload.savedRecord as SavedVideoRecord;
+              }
             }
           }
         }
@@ -124,19 +221,39 @@ export default function App() {
         if (!receivedStoryboard) {
           throw new Error("Stream ended before storyboard finished generating. Please try again.");
         }
-
-        setStoryboard(receivedStoryboard);
-        setCurrentTime(0);
-        setIsPlaying(true);
       } else {
         const data = await parseJsonSafely(response);
         if (!response.ok) {
           throw new Error(data?.error || "Unable to generate whiteboard storyboard.");
         }
-        setStoryboard(data as QuizStoryboard);
-        setCurrentTime(0);
-        setIsPlaying(true);
+        receivedStoryboard = data as QuizStoryboard;
+        if (data?.savedRecord) {
+          receivedSavedRecord = data.savedRecord as SavedVideoRecord;
+        }
       }
+
+      const nowIso = new Date().toISOString();
+      const recordToSave: SavedVideoRecord = receivedSavedRecord ?? {
+        id: `vid-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        isSeeded: false,
+        storyboard: receivedStoryboard,
+      };
+
+      setSavedVideos((prev) => {
+        const next = mergeSavedVideoLists([recordToSave], prev);
+        writeLocalSavedVideos(next);
+        return next;
+      });
+      if (!receivedSavedRecord) {
+        persistVideoToServer(recordToSave);
+      }
+
+      setActiveVideoId(recordToSave.id);
+      setStoryboard(receivedStoryboard);
+      setCurrentTime(0);
+      setIsPlaying(true);
     } catch (err: any) {
       setError(err?.message || "Something went wrong while generating your video.");
     } finally {
@@ -144,11 +261,39 @@ export default function App() {
     }
   };
 
+  const commitStoryboardEdit = (nextStoryboard: QuizStoryboard) => {
+    if (!activeVideoId) return;
+    const updatedRecord: SavedVideoRecord = {
+      id: activeVideoId,
+      createdAt:
+        savedVideos.find((v) => v.id === activeVideoId)?.createdAt ??
+        new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      isSeeded: savedVideos.find((v) => v.id === activeVideoId)?.isSeeded,
+      storyboard: nextStoryboard,
+    };
+
+    setSavedVideos((prev) => {
+      const next = mergeSavedVideoLists([updatedRecord], prev);
+      writeLocalSavedVideos(next);
+      return next;
+    });
+
+    if (syncTimeoutRef.current) {
+      window.clearTimeout(syncTimeoutRef.current);
+    }
+    syncTimeoutRef.current = window.setTimeout(() => {
+      persistVideoToServer(updatedRecord);
+    }, 350);
+  };
+
   const handleUpdateClue = (index: number, patch: Partial<ClueScene>) => {
     setStoryboard((prev) => {
       if (!prev) return prev;
       const updated = prev.clues.map((c, idx) => (idx === index ? { ...c, ...patch } : c));
-      return { ...prev, clues: updated };
+      const nextStoryboard = { ...prev, clues: updated };
+      commitStoryboardEdit(nextStoryboard);
+      return nextStoryboard;
     });
   };
 
@@ -182,9 +327,44 @@ export default function App() {
     }
   };
 
+  const handleSelectSavedVideo = (record: SavedVideoRecord, nextTab?: StudioPanelTab) => {
+    setError(null);
+    setActiveVideoId(record.id);
+    setStoryboard(record.storyboard);
+    setTitle(record.storyboard.title);
+    setContentType(record.storyboard.contentType);
+    setDifficulty(record.storyboard.difficulty);
+    setDuration(record.storyboard.duration);
+    setClueCount(record.storyboard.clues.length);
+    setCurrentTime(0);
+    setIsPlaying(true);
+    if (nextTab) {
+      setActiveTab(nextTab);
+    }
+  };
+
+  const handleDeleteSavedVideo = async (id: string) => {
+    setSavedVideos((prev) => {
+      const next = prev.filter((item) => item.id !== id);
+      writeLocalSavedVideos(next);
+      return next;
+    });
+
+    if (activeVideoId === id) {
+      setActiveVideoId(null);
+    }
+
+    try {
+      await fetch(`/api/videos/${encodeURIComponent(id)}`, { method: "DELETE" });
+    } catch {
+      // local state already updated
+    }
+  };
+
   const handleReset = () => {
     setIsPlaying(false);
     setStoryboard(null);
+    setActiveVideoId(null);
     setCurrentTime(0);
     setTitle("");
     setError(null);
@@ -232,6 +412,17 @@ export default function App() {
             </button>
             <button
               type="button"
+              onClick={() => setActiveTab("history")}
+              className={`hover:text-[#FFFFFF] transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                activeTab === "history"
+                  ? "text-[#FFFFFF] underline decoration-[#F96921] decoration-2 underline-offset-4"
+                  : ""
+              }`}
+            >
+              Saved Videos ({savedVideos.length})
+            </button>
+            <button
+              type="button"
               onClick={() => setSpecsModalOpen(true)}
               className="hover:text-[#FFFFFF] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
             >
@@ -246,7 +437,14 @@ export default function App() {
             </button>
           </nav>
 
-          <div className="flex items-center shrink-0">
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setActiveTab("history")}
+              className="md:hidden px-3 py-2 text-xs font-medium text-[#F0F0F0] bg-[#262626] hover:bg-[#303030] rounded-lg transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              Saved ({savedVideos.length})
+            </button>
             <button
               type="button"
               onClick={() => {
@@ -293,6 +491,10 @@ export default function App() {
             onUpdateClue={handleUpdateClue}
             onRegenerateClue={handleRegenerateClue}
             regeneratingClueIndex={regeneratingClueIndex}
+            savedVideos={savedVideos}
+            activeVideoId={activeVideoId}
+            onSelectSavedVideo={handleSelectSavedVideo}
+            onDeleteSavedVideo={handleDeleteSavedVideo}
           />
 
           <WhiteboardStage
@@ -308,6 +510,8 @@ export default function App() {
               setContentType(sampleType);
               handleGenerate(sampleTitle, sampleType);
             }}
+            savedCount={savedVideos.length}
+            onBrowseSaved={() => setActiveTab("history")}
           />
         </div>
       </main>
