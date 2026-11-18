@@ -13,6 +13,7 @@ const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT) || 3000;
 const DATA_DIR = path.resolve(__dirname, "data");
 const SAVED_VIDEOS_FILE = path.join(DATA_DIR, "saved-videos.json");
+const SEED_TRACKER_FILE = path.join(DATA_DIR, ".seeded-ids.json");
 const SEED_VIDEOS_FILE = path.resolve(__dirname, "src/data/seedVideos.json");
 
 interface ServerSavedVideo {
@@ -37,15 +38,48 @@ async function readSeedVideos(): Promise<ServerSavedVideo[]> {
 async function loadSavedVideos(): Promise<ServerSavedVideo[]> {
   try {
     await fsPromises.mkdir(DATA_DIR, { recursive: true });
+    const seeded = await readSeedVideos();
+
     if (!fs.existsSync(SAVED_VIDEOS_FILE)) {
-      const seeded = await readSeedVideos();
       await fsPromises.writeFile(SAVED_VIDEOS_FILE, JSON.stringify(seeded, null, 2), "utf8");
+      await fsPromises.writeFile(
+        SEED_TRACKER_FILE,
+        JSON.stringify(seeded.map((v) => v.id), null, 2),
+        "utf8"
+      );
       return seeded;
     }
+
     const raw = await fsPromises.readFile(SAVED_VIDEOS_FILE, "utf8");
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.sort(
+    const existing: ServerSavedVideo[] = Array.isArray(parsed) ? parsed : [];
+
+    let knownSeedIds: string[] = [];
+    if (fs.existsSync(SEED_TRACKER_FILE)) {
+      try {
+        const trackerRaw = await fsPromises.readFile(SEED_TRACKER_FILE, "utf8");
+        const trackerParsed = JSON.parse(trackerRaw);
+        if (Array.isArray(trackerParsed)) knownSeedIds = trackerParsed;
+      } catch {
+        knownSeedIds = [];
+      }
+    } else {
+      knownSeedIds = existing.filter((v) => v.isSeeded).map((v) => v.id);
+    }
+
+    const knownSet = new Set(knownSeedIds);
+    const existingIdSet = new Set(existing.map((v) => v.id));
+    const newlyAddedSeeds = seeded.filter((s) => !knownSet.has(s.id) && !existingIdSet.has(s.id));
+
+    let combined = existing;
+    if (newlyAddedSeeds.length > 0 || !fs.existsSync(SEED_TRACKER_FILE)) {
+      combined = [...newlyAddedSeeds, ...existing];
+      const nextKnown = Array.from(new Set([...knownSeedIds, ...seeded.map((s) => s.id)]));
+      await fsPromises.writeFile(SAVED_VIDEOS_FILE, JSON.stringify(combined, null, 2), "utf8");
+      await fsPromises.writeFile(SEED_TRACKER_FILE, JSON.stringify(nextKnown, null, 2), "utf8");
+    }
+
+    return combined.sort(
       (a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime()
     );
   } catch (err) {
@@ -174,6 +208,20 @@ const ILLUSTRATION_IDS = [
   "compass",
   "heart_broken",
   "puzzle_cube",
+  "scooter_vespa",
+  "cricket_bat_ball",
+  "coin_toss",
+  "diya_lamp",
+  "palace_arch",
+  "paint_palette",
+  "piano_keys",
+  "gold_medal",
+  "motorcycle_sidecar",
+  "wedding_garland",
+  "radio_transistor",
+  "stethoscope",
+  "mustard_field",
+  "paper_kite",
 ] as const;
 
 const CLUE_SCHEMA = {
@@ -196,17 +244,35 @@ const CLUE_SCHEMA = {
       description:
         "Visual composition on the whiteboard: 'pair_relation' (2 icons linked by +, ->, vs, or =), 'cause_effect' (trigger icon curving into result icon), 'thought_bubble' (person imagining primaryIcon), or 'single_spotlight' (1 giant iconic object).",
     },
+    backdrop: {
+      type: Type.STRING,
+      enum: [
+        "desert",
+        "city_night",
+        "ocean",
+        "space",
+        "lab",
+        "forest",
+        "office",
+        "dungeon",
+        "suburbia",
+        "stage",
+        "palace",
+        "railway",
+        "village",
+      ],
+      description:
+        "Environmental whiteboard setting sketched softly behind the main subjects to ground the scene (use 'palace' for havelis/royal forts/weddings, 'railway' for trains/stations, 'village' for rural India/fields/cricket grounds).",
+    },
     primaryIcon: {
       type: Type.STRING,
-      enum: [...ILLUSTRATION_IDS],
       description:
-        "Primary artist-drawn whiteboard illustration chosen strictly from the allowed list.",
+        "Primary illustration ID chosen strictly from the ALLOWED ICONS list in the instructions.",
     },
     secondaryIcon: {
       type: Type.STRING,
-      enum: [...ILLUSTRATION_IDS],
       description:
-        "Second whiteboard illustration paired with primaryIcon when layout is 'pair_relation' or 'cause_effect'. Choose a distinct icon that completes the visual story.",
+        "Second illustration ID from ALLOWED ICONS when layout is 'pair_relation' or 'cause_effect', or 'none' for single_spotlight/thought_bubble.",
     },
     connector: {
       type: Type.STRING,
@@ -217,7 +283,7 @@ const CLUE_SCHEMA = {
     boardNote: {
       type: Type.STRING,
       description:
-        "Short 1 to 4 word handwritten punchline drawn inside the bottom of the sketch frame (e.g., '99.1% Pure', '88 MPH', 'Never Stops?'). Never put the title here.",
+        "Short 1 to 4 word handwritten punchline drawn on a sticky-note callout inside the sketch frame (e.g., 'All Izz Well!', '88 MPH', '2nd October!'). Never put the title here.",
     },
     symbolBadge: {
       type: Type.STRING,
@@ -246,10 +312,13 @@ const CLUE_SCHEMA = {
     "header",
     "caption",
     "layout",
+    "backdrop",
     "primaryIcon",
+    "secondaryIcon",
+    "connector",
+    "boardNote",
     "symbolBadge",
     "accentColor",
-    "boardNote",
   ],
 };
 
@@ -306,26 +375,106 @@ const STORYBOARD_SCHEMA = {
 
 const VALID_ICON_SET = new Set<string>(ILLUSTRATION_IDS);
 
+const VALID_BACKDROP_SET = new Set<string>([
+  "desert",
+  "city_night",
+  "ocean",
+  "space",
+  "lab",
+  "forest",
+  "office",
+  "dungeon",
+  "suburbia",
+  "stage",
+  "palace",
+  "railway",
+  "village",
+]);
+
+function resolveIconId(raw: unknown, fallback?: string): string | undefined {
+  if (typeof raw !== "string") return fallback;
+  const cleaned = raw.trim().toLowerCase();
+  if (!cleaned || cleaned === "none" || cleaned === "null") return fallback;
+  if (VALID_ICON_SET.has(cleaned)) return cleaned;
+
+  const aliases: Array<[RegExp, string]> = [
+    [/scooter|vespa|moped/, "scooter_vespa"],
+    [/cricket|bat|stump/, "cricket_bat_ball"],
+    [/coin|toss|heads|tails/, "coin_toss"],
+    [/diya|lamp|oil_lamp|candle/, "diya_lamp"],
+    [/palace|haveli|fort|mahal|temple/, "palace_arch"],
+    [/paint|brush|palette|art|canvas/, "paint_palette"],
+    [/piano|keyboard|synth/, "piano_keys"],
+    [/medal|olympic|podium/, "gold_medal"],
+    [/sidecar|motorcycle|motorbike|bullet/, "motorcycle_sidecar"],
+    [/wedding|garland|bride|groom|mandap|marriage/, "wedding_garland"],
+    [/radio|transistor|boombox/, "radio_transistor"],
+    [/stethoscope|doctor|hospital|medical/, "stethoscope"],
+    [/mustard|field|farm|wheat|crop/, "mustard_field"],
+    [/kite|patang/, "paper_kite"],
+    [/train|railway|locomotive|station/, "train_locomotive"],
+    [/guitar|mandolin|sitar/, "guitar_instrument"],
+    [/envelope|letter|mail|postcard/, "letter_envelope"],
+    [/book|diary|journal|notebook/, "book_journal"],
+    [/money|cash|dollar|rupee|banknote/, "money_stack"],
+    [/police|cop|badge|inspector/, "police_badge"],
+    [/prison|jail|bars|cell/, "prison_bars"],
+    [/phone|telephone|call/, "telephone"],
+    [/ticket|pass|boarding/, "ticket_stub"],
+    [/ring|band/, "ring_band"],
+    [/top|totem|spinner/, "spinning_top"],
+    [/pill|capsule/, "pills"],
+    [/flask|beaker|lab|chem/, "flask_beaker"],
+    [/van|camper|rv|bus/, "rv_van"],
+    [/ship|boat|titanic|liner/, "ship_liner"],
+    [/car|delorean|sports_car|taxi/, "sports_car"],
+    [/plane|airplane|flight|jet/, "airplane"],
+    [/trophy|cup|award/, "trophy_cup"],
+    [/crown|king|queen|throne/, "crown"],
+    [/sword|fight|weapon|gun/, "sword_shield"],
+    [/heart|love|romance/, "heart_broken"],
+    [/city|skyline|mumbai|delhi|gotham/, "city_skyline"],
+    [/village|forest|tree/, "forest_trees"],
+    [/house|home|mansion/, "house_mansion"],
+    [/door|portal|gate/, "door_portal"],
+    [/clock|watch|time/, "clock_tower"],
+    [/eye|blind|sight|vision/, "eye_iris"],
+    [/mic|sing|microphone|stage/, "microphone"],
+    [/camera|photo|film|movie/, "camera_lens"],
+    [/mask|clown|ghost|theater/, "mask_theater"],
+  ];
+
+  for (const [pattern, target] of aliases) {
+    if (pattern.test(cleaned)) return target;
+  }
+  return fallback;
+}
+
 function normalizeClue(clue: any, idx: number) {
-  const primaryIcon = VALID_ICON_SET.has(clue?.primaryIcon)
-    ? clue.primaryIcon
-    : "magnifying_glass";
-  const secondaryIcon = VALID_ICON_SET.has(clue?.secondaryIcon)
-    ? clue.secondaryIcon
-    : undefined;
+  const primaryIcon = resolveIconId(clue?.primaryIcon, "magnifying_glass")!;
+  const rawSecondary = resolveIconId(clue?.secondaryIcon, undefined);
   let layout =
     clue?.layout === "pair_relation" ||
     clue?.layout === "cause_effect" ||
     clue?.layout === "thought_bubble" ||
     clue?.layout === "single_spotlight"
       ? clue.layout
-      : secondaryIcon
+      : rawSecondary
       ? "pair_relation"
       : "single_spotlight";
+
+  const secondaryIcon =
+    layout === "pair_relation" || layout === "cause_effect"
+      ? rawSecondary && rawSecondary !== primaryIcon
+        ? rawSecondary
+        : undefined
+      : undefined;
 
   if ((layout === "pair_relation" || layout === "cause_effect") && !secondaryIcon) {
     layout = "single_spotlight";
   }
+
+  const backdrop = VALID_BACKDROP_SET.has(clue?.backdrop) ? clue.backdrop : undefined;
 
   return {
     id: `clue-${idx + 1}-${Date.now()}`,
@@ -333,6 +482,7 @@ function normalizeClue(clue: any, idx: number) {
     header: String(clue?.header || `Clue ${idx + 1}`),
     caption: String(clue?.caption || ""),
     layout,
+    backdrop,
     primaryIcon,
     secondaryIcon,
     connector:
@@ -497,6 +647,52 @@ async function generateWithFallbackStream(
   throw lastError;
 }
 
+async function fetchMovieFactBrief(
+  ai: GoogleGenAI,
+  title: string,
+  contentType: "Movie" | "TV Series"
+): Promise<string> {
+  const primaryCoolingDown = Date.now() < primaryModelCooldownUntil;
+  const modelsToTry: Array<{ model: string; thinkingLevel: ThinkingLevel }> = primaryCoolingDown
+    ? [{ model: "gemini-3.1-flash-lite", thinkingLevel: ThinkingLevel.MINIMAL }]
+    : [
+        { model: "gemini-4-hydrogen", thinkingLevel: ThinkingLevel.LOW },
+        { model: "gemini-3.1-flash-lite", thinkingLevel: ThinkingLevel.MINIMAL },
+      ];
+
+  const prompt = `Look up the ${contentType} "${title}" (including Bollywood, Hindi, Tamil, Telugu, Indian OTT web series, Hollywood, or international cinema).
+Return a concise, accurate trivia & plot brief (max 220 words) containing:
+1. Official title, release year/run, director or creator, and industry/genre (e.g. Bollywood Action Comedy, Hindi Crime Series, Sci-Fi Thriller).
+2. 6-7 hyper-specific, unmistakable visual story details: iconic props, vehicles, costumes, locations, famous numbers/dates, songs/instruments, and memorable plot twists or iconic scenes fans immediately recognize.
+3. One verified fun behind-the-scenes or box-office trivia fact.`;
+
+  for (const attempt of modelsToTry) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error("Search lookup timed out")), 7500);
+    try {
+      const response = await ai.models.generateContent({
+        model: attempt.model,
+        contents: prompt,
+        config: {
+          tools: [{ googleSearch: {} }],
+          thinkingConfig: { thinkingLevel: attempt.thinkingLevel },
+          abortSignal: controller.signal,
+        },
+      });
+      clearTimeout(timer);
+      const text = response.text?.trim() || "";
+      if (text) return text;
+    } catch (err: any) {
+      clearTimeout(timer);
+      if (attempt.model === "gemini-4-hydrogen" && isQuotaOrLimitError(err)) {
+        primaryModelCooldownUntil = Date.now() + 5 * 60 * 1000;
+      }
+      // Continue cleanly to fallback or return empty brief without failing generation
+    }
+  }
+  return "";
+}
+
 async function startServer() {
   const app = express();
   app.use(express.json({ limit: "1mb" }));
@@ -557,7 +753,7 @@ async function startServer() {
       difficulty === "Easy" || difficulty === "Hard" ? difficulty : "Medium";
     const validDuration = [15, 30, 45, 60].includes(Number(duration))
       ? Number(duration)
-      : 30;
+      : 45;
     const validClueCount = Math.min(7, Math.max(3, Math.round(Number(clueCount) || 5)));
 
     let ai: GoogleGenAI;
@@ -582,7 +778,7 @@ async function startServer() {
       res.setHeader("Connection", "keep-alive");
       res.setHeader("X-Accel-Buffering", "no");
       res.flushHeaders?.();
-      sendStatus("Designing visual clue scenes...");
+      sendStatus("Researching film & Bollywood trivia...");
       heartbeat = setInterval(() => {
         if (!res.writableEnded) {
           res.write(`: keepalive\n\n`);
@@ -603,41 +799,73 @@ async function startServer() {
     };
 
     try {
+      const factBrief = await fetchMovieFactBrief(ai, cleanTitle, validType);
+      sendStatus("Designing visual clue scenes...");
+
       const difficultyGuidance =
         validDifficulty === "Easy"
-          ? "Easy difficulty: Use the most famous, unmistakable signature props, vehicles, locations, and plot twists so viewers get an 'aha!' moment within 2–3 clues."
+          ? "Easy difficulty: Use the most famous, unmistakable signature props, vehicles, locations, songs, and plot twists so viewers get an 'aha!' moment within 2–3 clues."
           : validDifficulty === "Hard"
           ? "Hard difficulty: Start with clever indirect plot mechanics, thematic pairings, or deep-cut props (Clues 1–2) before narrowing to sharper iconic hints at the end—still concrete and fair, never generic."
           : "Medium difficulty: Build a crisp funnel—Clue 1 establishes setting/premise, middle clues lock in key objects & conflicts, final clue delivers an unmistakable visual signature.";
 
-      const systemInstruction = `You are a viral whiteboard quiz director for Instagram Reels, YouTube Shorts, and TikTok.
+      const allowedIconsPrompt = `ALLOWED ICONS (pick ONLY exact IDs from this list):
+${ILLUSTRATION_IDS.join(", ")}`;
+
+      const systemInstruction = `You are a viral whiteboard quiz director for Instagram Reels, YouTube Shorts, and TikTok, with deep expertise in BOTH Hollywood/Global cinema AND Bollywood / Hindi / Indian cinema & OTT web series.
 Your job is to craft a ${validClueCount}-clue visual guessing game for the ${validType}: "${cleanTitle}".
 
+${allowedIconsPrompt}
+
 HOW DRAWINGS WORK (CRITICAL):
-You do NOT write raw SVG coordinates. Instead, our dry-erase engine draws crisp, recognizable artist-crafted illustrations from the schema's icon enum and composes them into 4 visual storytelling layouts:
-- "pair_relation": Draws primaryIcon + connector ("plus", "arrow", "vs", "equals") + secondaryIcon. IDEAL for combining two iconic elements (e.g., flask_beaker + rv_van = desert lab, ship_liner + iceberg = doomed voyage, rocket_spacecraft -> black_hole_planet = space mission, clock_tower + sports_car = time travel).
-- "cause_effect": Draws primaryIcon curving via an action arrow into secondaryIcon (e.g., syringe_vial -> heart_broken, bicycle -> monster_portal, prison_bars -> key_lock).
-- "thought_bubble": Draws a thinker imagining primaryIcon (great for dreams, memories, secrets, hallucinations, or obsessions).
-- "single_spotlight": Draws one large framed centerpiece icon (e.g., spinning_top, ring_band, waffle_plate, bat_emblem, chess_piece).
+You do NOT write raw SVG coordinates. Instead, our dry-erase engine draws crisp, recognizable artist-crafted illustrations from ALLOWED ICONS and composes them into 4 visual storytelling layouts:
+- "pair_relation": Draws primaryIcon + connector ("plus", "arrow", "vs", "equals") + secondaryIcon. IDEAL for combining two iconic elements (e.g., flask_beaker + rv_van = desert lab, scooter_vespa + wedding_garland = 3 Idiots bride escape, mustard_field -> train_locomotive = DDLJ, cricket_bat_ball vs crown = Lagaan, piano_keys + eye_iris = Andhadhun).
+- "cause_effect": Draws primaryIcon curving via an action arrow into secondaryIcon (e.g., clock_tower -> gold_medal = Dangal 5 AM training, syringe_vial -> heart_broken, bicycle -> monster_portal, coin_toss -> money_stack = Scam 1992).
+- "thought_bubble": Draws a thinker imagining primaryIcon (set secondaryIcon to "none").
+- "single_spotlight": Draws one large framed centerpiece icon (set secondaryIcon to "none").
 
-Use "pair_relation" or "cause_effect" for MOST clues (at least 60% of clues) because two-object visual equations make 10x better charades/pictionary hints than single generic symbols!
-NEVER repeat the same primaryIcon across different clues in the same quiz.
+ENVIRONMENTAL BACKDROPS:
+Always choose the most atmospheric backdrop:
+- "palace": Indian palaces, havelis, royal forts, grand wedding venues (Padmaavat, Bajirao Mastani, Bhool Bhulaiyaa, DDLJ, Om Shanti Om, Mirzapur).
+- "railway": Train stations, platforms, steam/express trains (DDLJ, Sholay, Jab We Met, Chennai Express, Kahaani, Harry Potter).
+- "village": Rural fields, mud arenas, village streets, cricket pitches (Lagaan, Dangal, Swades, Sholay, Panchayat, Laapataa Ladies).
+- Plus "desert", "city_night", "ocean", "space", "lab", "forest", "office", "dungeon", "suburbia", "stage".
 
-WHAT MAKES GREAT HINTS (NEVER BE VAGUE!):
+BOLLYWOOD & INDIAN CINEMA MASTERY:
+When the title is a Bollywood, Hindi, South Indian, or Indian OTT series, NEVER give generic Western/vague clues! Use iconic Indian cinema props, famous catchphrases (without naming characters or the title!), songs/instruments, exact dates/numbers, vehicles, and settings:
+- 3 Idiots: { layout: "pair_relation", backdrop: "village", primaryIcon: "scooter_vespa", connector: "plus", secondaryIcon: "wedding_garland", boardNote: "All Izz Well!", caption: "Two friends ride a yellow scooter to steal a bride on September 5th." }
+- Sholay: { layout: "single_spotlight", backdrop: "desert", primaryIcon: "coin_toss", secondaryIcon: "none", boardNote: "Heads Every Time", caption: "A rigged two-headed coin settles who stays behind on the bridge." }
+- DDLJ: { layout: "pair_relation", backdrop: "railway", primaryIcon: "mustard_field", connector: "arrow", secondaryIcon: "train_locomotive", boardNote: "Ja, Live Life!", caption: "Mandolin notes in golden mustard fields lead to a running train finale." }
+- Lagaan: { layout: "pair_relation", backdrop: "village", primaryIcon: "cricket_bat_ball", connector: "vs", secondaryIcon: "crown", boardNote: "Teen Guna Tax!", caption: "Villagers learn a British bat-and-ball game to erase triple taxes." }
+- Andhadhun: { layout: "pair_relation", backdrop: "city_night", primaryIcon: "piano_keys", connector: "plus", secondaryIcon: "eye_iris", boardNote: "Keep Playing!", caption: "A 'blind' pianist keeps playing beside a corpse in the living room." }
+- Drishyam: { layout: "pair_relation", backdrop: "suburbia", primaryIcon: "ticket_stub", connector: "plus", secondaryIcon: "police_badge", boardNote: "2nd October!", caption: "A 4th-grade dropout builds an airtight alibi using bus tickets." }
+- PK: { layout: "pair_relation", backdrop: "desert", primaryIcon: "alien_ufo", connector: "plus", secondaryIcon: "radio_transistor", boardNote: "Wrong Number!", caption: "A stranded visitor clutches a yellow radio hunting his stolen remote." }
+- Munna Bhai M.B.B.S.: { layout: "pair_relation", backdrop: "lab", primaryIcon: "stethoscope", connector: "plus", secondaryIcon: "heart_broken", boardNote: "Magic Hug!", caption: "A Mumbai don enters med school and cures patients with warm hugs." }
+- Dangal: { layout: "cause_effect", backdrop: "village", primaryIcon: "clock_tower", connector: "arrow", secondaryIcon: "gold_medal", boardNote: "5 AM Akhada", caption: "A strict father wakes his daughters at dawn to win wrestling gold." }
+- Stree: { layout: "pair_relation", backdrop: "palace", primaryIcon: "wedding_garland", connector: "vs", secondaryIcon: "door_portal", boardNote: "Kal Aana!", caption: "Townsfolk paint a warning on doors to ward off a festival-night spirit." }
+- Mirzapur: { layout: "pair_relation", backdrop: "palace", primaryIcon: "crown", connector: "vs", secondaryIcon: "sword_shield", boardNote: "Purvanchal Throne", caption: "A deadly carpet empire sparks a violent war for small-town rule." }
+- Scam 1992: { layout: "cause_effect", backdrop: "office", primaryIcon: "coin_toss", connector: "arrow", secondaryIcon: "money_stack", boardNote: "Risk Hai Toh...", caption: "A bold broker exploits bank loopholes to spark a 1992 stock boom." }
+
+HOLLYWOOD & GLOBAL EXAMPLES:
+- Breaking Bad: { layout: "pair_relation", backdrop: "desert", primaryIcon: "flask_beaker", connector: "plus", secondaryIcon: "rv_van", boardNote: "Desert Lab", caption: "A chemistry teacher cooks inside a rolling camper." }
+- Inception: { layout: "single_spotlight", backdrop: "stage", primaryIcon: "spinning_top", secondaryIcon: "none", boardNote: "Never stops?", caption: "One tiny metal totem proves if you are still dreaming." }
+- Titanic: { layout: "pair_relation", backdrop: "ocean", primaryIcon: "ship_liner", connector: "vs", secondaryIcon: "iceberg", boardNote: "April 1912", caption: "An 'unsinkable' luxury liner meets frozen doom at sea." }
+
+RULES:
 1. ${difficultyGuidance}
-2. BANNED VAGUE CLUES: Never write generic filler like "A dark secret hides inside", "Everything changes forever", or "Heroes must unite". Every clue MUST cite a specific plot detail, setting, occupation, vehicle, object, rule, or iconic number/quote!
-3. GOOD EXAMPLES:
-   - Breaking Bad: { layout: "pair_relation", primaryIcon: "flask_beaker", connector: "plus", secondaryIcon: "rv_van", boardNote: "Desert Lab", caption: "A chemistry teacher cooks inside a rolling camper." }
-   - Inception: { layout: "single_spotlight", primaryIcon: "spinning_top", boardNote: "Never stops?", caption: "One tiny metal totem proves if you are still dreaming." }
-   - Titanic: { layout: "pair_relation", primaryIcon: "ship_liner", connector: "vs", secondaryIcon: "iceberg", boardNote: "April 1912", caption: "An 'unsinkable' luxury liner meets frozen doom at sea." }
-   - The Matrix: { layout: "thought_bubble", primaryIcon: "pills", boardNote: "Red or Blue?", caption: "Swallow one capsule to wake up from a simulated world." }
-   - Back to the Future: { layout: "pair_relation", primaryIcon: "sports_car", connector: "plus", secondaryIcon: "clock_tower", boardNote: "88 MPH!", caption: "Hit top speed during a lightning storm to jump decades." }
-4. NO SPOILERS: Never put any word from "${cleanTitle}", actor names, or main character proper names in header, caption, or boardNote.
-5. Keep boardNote super punchy (1–4 words) and caption sharp (max 68 chars).`;
+2. Use "pair_relation" or "cause_effect" for MOST clues (at least 60% of clues) because two-object visual equations make 10x better charades/pictionary hints than single symbols.
+3. NEVER repeat the same primaryIcon across different clues in the same quiz.
+4. BANNED VAGUE CLUES: Never write generic filler like "A dark secret hides inside", "Everything changes forever", or "Heroes must unite". Every clue MUST cite a specific plot detail, setting, occupation, vehicle, object, rule, or iconic number/quote!
+5. NO SPOILERS: Never put any word from "${cleanTitle}", actor names, or main character proper names (no Rancho, Simran, Raj, Gabbar, Munna, Walter White, etc.) in header, caption, or boardNote.
+6. Keep boardNote super punchy (1–4 words) and caption sharp (max 68 chars).`;
+
+      const userPrompt = factBrief
+        ? `Create a ${validClueCount}-clue whiteboard quiz storyboard for the ${validType} "${cleanTitle}" (${validDifficulty} difficulty, ${validDuration}s total video). Number clues 1 to ${validClueCount} in a logical progression from setting/premise to iconic signature reveal.\n\nVERIFIED FILM / SERIES FACT SHEET:\n${factBrief}`
+        : `Create a ${validClueCount}-clue whiteboard quiz storyboard for the ${validType} "${cleanTitle}" (${validDifficulty} difficulty, ${validDuration}s total video). Number clues 1 to ${validClueCount} in a logical progression from setting/premise to iconic signature reveal.`;
 
       const trimmed = await generateWithFallbackStream(
         ai,
-        `Create a ${validClueCount}-clue whiteboard quiz storyboard for the ${validType} "${cleanTitle}" (${validDifficulty} difficulty, ${validDuration}s total video). Number clues 1 to ${validClueCount} in a logical progression from setting/premise to iconic signature reveal.`,
+        userPrompt,
         systemInstruction,
         STORYBOARD_SCHEMA,
         sendStatus
@@ -711,12 +939,25 @@ WHAT MAKES GREAT HINTS (NEVER BE VAGUE!):
       }
 
       const ai = createAiClient();
+      const factBrief = await fetchMovieFactBrief(
+        ai,
+        cleanTitle,
+        contentType === "TV Series" ? "TV Series" : "Movie"
+      );
+      const regenPrompt = factBrief
+        ? `Generate a fresh, vivid visual clue #${clueIndex} (out of ${totalClues}) for the ${contentType} "${cleanTitle}" at ${difficulty} difficulty. Do NOT repeat or paraphrase these existing captions: ${JSON.stringify(
+            existingCaptions || []
+          )}. Choose a distinct primaryIcon (and secondaryIcon when using pair_relation or cause_effect) plus an accurate backdrop ('palace', 'railway', 'village', etc.), write a punchy 1–4 word boardNote, and write a concrete spoiler-free caption (max 68 chars).\n\nVERIFIED FACT SHEET:\n${factBrief}`
+        : `Generate a fresh, vivid visual clue #${clueIndex} (out of ${totalClues}) for the ${contentType} "${cleanTitle}" at ${difficulty} difficulty. Do NOT repeat or paraphrase these existing captions: ${JSON.stringify(
+            existingCaptions || []
+          )}. Choose a distinct primaryIcon (and secondaryIcon when using pair_relation or cause_effect) plus an accurate backdrop, write a punchy 1–4 word boardNote, and write a concrete spoiler-free caption (max 68 chars).`;
+
       const rawText = await generateWithFallbackStream(
         ai,
-        `Generate a fresh, vivid visual clue #${clueIndex} (out of ${totalClues}) for the ${contentType} "${cleanTitle}" at ${difficulty} difficulty. Do NOT repeat or paraphrase these existing captions: ${JSON.stringify(
-          existingCaptions || []
-        )}. Choose a distinct primaryIcon (and secondaryIcon when using pair_relation or cause_effect), write a punchy 1–4 word boardNote, and write a concrete spoiler-free caption (max 68 chars).`,
-        "You are a whiteboard quiz visual director. Pick recognizable compositional icons from the allowed enum (preferring pair_relation or cause_effect visual equations), add a 1-4 word boardNote, and write a specific, non-vague trivia hint that never reveals the title or character proper names.",
+        regenPrompt,
+        `You are a whiteboard quiz visual director expert in both Hollywood and Bollywood / Indian cinema. Pick recognizable compositional icons ONLY from this allowed list (${ILLUSTRATION_IDS.join(
+          ", "
+        )}) and backdrops from the allowed enum (preferring pair_relation or cause_effect visual equations; set secondaryIcon to 'none' for single_spotlight/thought_bubble), add a 1-4 word boardNote, and write a specific, non-vague trivia hint that never reveals the title or character proper names.`,
         CLUE_SCHEMA
       );
 

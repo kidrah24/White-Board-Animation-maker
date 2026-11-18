@@ -34,6 +34,7 @@ interface QuizConfigPanelProps {
   activeClueIndex: number | null;
   onJumpToTime: (time: number) => void;
   onUpdateClue: (index: number, patch: Partial<ClueScene>) => void;
+  onUpdateStoryboardDuration: (duration: DurationSeconds) => void;
   onRegenerateClue: (index: number) => void;
   regeneratingClueIndex: number | null;
   savedVideos: SavedVideoRecord[];
@@ -51,11 +52,12 @@ const ACCENT_SWATCHES: Array<{ id: MarkerAccent; label: string; dotClass: string
 ];
 
 const QUICK_IDEAS: Array<{ title: string; type: ContentType }> = [
+  { title: "3 Idiots", type: "Movie" },
+  { title: "Sholay", type: "Movie" },
+  { title: "Andhadhun", type: "Movie" },
   { title: "Inception", type: "Movie" },
   { title: "Stranger Things", type: "TV Series" },
-  { title: "Spirited Away", type: "Movie" },
-  { title: "Severance", type: "TV Series" },
-  { title: "The Dark Knight", type: "Movie" },
+  { title: "Mirzapur", type: "TV Series" },
 ];
 
 export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
@@ -79,6 +81,7 @@ export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
   activeClueIndex,
   onJumpToTime,
   onUpdateClue,
+  onUpdateStoryboardDuration,
   onRegenerateClue,
   regeneratingClueIndex,
   savedVideos,
@@ -191,7 +194,7 @@ export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
               type="text"
               value={title}
               onChange={(e) => onTitleChange(e.target.value)}
-              placeholder="e.g., Inception, Breaking Bad, Dune"
+              placeholder="e.g., 3 Idiots, Sholay, Inception, Mirzapur"
               required
               disabled={isGenerating}
               className="w-full min-h-[42px] px-3.5 py-2 text-sm text-[#F0F0F0] bg-[#111111] border border-[#303030] rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F96921] focus-visible:border-[#F96921] placeholder:text-[#71717D] disabled:opacity-60"
@@ -378,9 +381,19 @@ export const QuizConfigPanel: React.FC<QuizConfigPanelProps> = ({
                   <h3 className="text-sm font-semibold text-[#F0F0F0] truncate">
                     {storyboard.title}
                   </h3>
-                  <span className="text-xs font-mono-tabular text-[#FFB41F] whitespace-nowrap">
-                    {storyboard.duration}s
-                  </span>
+                  <select
+                    aria-label="Video duration"
+                    value={storyboard.duration}
+                    onChange={(e) =>
+                      onUpdateStoryboardDuration(Number(e.target.value) as DurationSeconds)
+                    }
+                    className="px-2 py-0.5 text-xs font-mono-tabular text-[#FFB41F] bg-[#111111] border border-[#303030] rounded-md cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#F96921]"
+                  >
+                    <option value={15}>15s</option>
+                    <option value={30}>30s</option>
+                    <option value={45}>45s</option>
+                    <option value={60}>60s</option>
+                  </select>
                 </div>
                 <div className="flex items-center gap-2 text-xs text-[#9F9FAA]">
                   <span>{storyboard.contentType}</span>

@@ -13,6 +13,21 @@ export type ClueLayout =
 
 export type ConnectorType = "plus" | "arrow" | "vs" | "equals";
 
+export type SceneBackdrop =
+  | "desert"
+  | "city_night"
+  | "ocean"
+  | "space"
+  | "lab"
+  | "forest"
+  | "office"
+  | "dungeon"
+  | "suburbia"
+  | "stage"
+  | "palace"
+  | "railway"
+  | "village";
+
 export type SymbolBadge =
   | "question"
   | "lightning"
@@ -42,6 +57,7 @@ export interface ClueScene {
   symbolBadge: SymbolBadge;
   accentColor: MarkerAccent;
   layout?: ClueLayout;
+  backdrop?: SceneBackdrop;
   primaryIcon?: IllustrationId;
   secondaryIcon?: IllustrationId;
   connector?: ConnectorType;

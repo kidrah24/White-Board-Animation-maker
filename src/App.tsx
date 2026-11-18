@@ -14,6 +14,7 @@ import {
 } from "./types";
 
 const LOCAL_STORAGE_KEY = "whiteboard_quiz_saved_videos_v1";
+const MIGRATED_45S_KEY = "whiteboard_quiz_migrated_45s_v1";
 const SEEDED_VIDEOS = seedVideosJson as SavedVideoRecord[];
 
 function mergeSavedVideoLists(
@@ -44,9 +45,23 @@ function mergeSavedVideoLists(
 function readLocalSavedVideos(): SavedVideoRecord[] {
   try {
     const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
-    if (!raw) return SEEDED_VIDEOS;
+    if (!raw) {
+      localStorage.setItem(MIGRATED_45S_KEY, "1");
+      return SEEDED_VIDEOS;
+    }
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return SEEDED_VIDEOS;
+
+    if (!localStorage.getItem(MIGRATED_45S_KEY)) {
+      const upgraded = (parsed as SavedVideoRecord[]).map((item) =>
+        item?.storyboard?.duration === 30
+          ? { ...item, storyboard: { ...item.storyboard, duration: 45 as DurationSeconds } }
+          : item
+      );
+      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(upgraded));
+      localStorage.setItem(MIGRATED_45S_KEY, "1");
+      return upgraded;
+    }
     return parsed;
   } catch {
     return SEEDED_VIDEOS;
@@ -80,7 +95,7 @@ export default function App() {
   const [title, setTitle] = useState("");
   const [contentType, setContentType] = useState<ContentType>("Movie");
   const [difficulty, setDifficulty] = useState<DifficultyLevel>("Medium");
-  const [duration, setDuration] = useState<DurationSeconds>(30);
+  const [duration, setDuration] = useState<DurationSeconds>(45);
   const [clueCount, setClueCount] = useState<number>(5);
 
   const [activeTab, setActiveTab] = useState<StudioPanelTab>("setup");
@@ -297,6 +312,16 @@ export default function App() {
     });
   };
 
+  const handleUpdateStoryboardDuration = (nextDuration: DurationSeconds) => {
+    setDuration(nextDuration);
+    setStoryboard((prev) => {
+      if (!prev) return prev;
+      const nextStoryboard = { ...prev, duration: nextDuration };
+      commitStoryboardEdit(nextStoryboard);
+      return nextStoryboard;
+    });
+  };
+
   const handleRegenerateClue = async (index: number) => {
     if (!storyboard || regeneratingClueIndex !== null) return;
     setRegeneratingClueIndex(index);
@@ -489,6 +514,7 @@ export default function App() {
               setIsPlaying(true);
             }}
             onUpdateClue={handleUpdateClue}
+            onUpdateStoryboardDuration={handleUpdateStoryboardDuration}
             onRegenerateClue={handleRegenerateClue}
             regeneratingClueIndex={regeneratingClueIndex}
             savedVideos={savedVideos}
